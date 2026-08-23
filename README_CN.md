@@ -121,17 +121,33 @@ server=http://cdn1.example.com:25565,http://cdn2.example.com:8443
 
 ```
 ├── Dockerfile
+├── LICENSE
+├── README.md
+├── README_CN.md
 ├── server/
-│   ├── app.py                  # Flask API
+│   ├── app.py                  # Flask API（清单、文件、Agent、配置、健康检查）
 │   ├── entrypoint.sh           # 容器入口
-│   ├── generate_manifest.py    # 清单生成器
+│   ├── generate_manifest.py    # 扫描文件、计算 SHA-256、生成清单 JSON
 │   └── requirements.txt
-├── agent/
-│   ├── src/Launcher.java       # 启动器
-│   ├── src/UpdateAgent.java    # 核心 Agent
-│   ├── META-INF/MANIFEST.MF
-│   ├── build.sh / build.bat    # 构建两个 JAR
-│   └── setup-agent.sh / setup-agent.bat
+└── agent/
+    ├── META-INF/MANIFEST.MF   # Premain-Class: Launcher
+    ├── src/
+    │   ├── Launcher.java         # -javaagent 入口；用 .new 替换核心 JAR 并动态加载
+    │   ├── UpdateAgent.java      # 核心入口（premain）：配置解析 + 更新流程
+    │   ├── UpdateApplication.java  # 流程控制：串联服务与 GUI，控制 Minecraft 启动
+    │   ├── UpdateService.java    # 更新逻辑：清单、哈希校验、下载、清理、自更新
+    │   ├── UpdateGUI.java        # Swing 界面（状态、进度、日志、速度）；SwingWorker + EDT
+    │   ├── UpdateListener.java   # 业务层 → 界面回调接口（不依赖 Swing）
+    │   ├── UpdateResult.java     # 更新结果：updated / failed 计数
+    │   ├── ServerClient.java     # 支持多源故障转移的 HTTP 客户端
+    │   ├── FileManager.java      # 路径安全检查、SHA-256、原子替换、过期文件清理
+    │   ├── Manifest.java         # 解析后的清单模型（文件 + 管理/排除路径 + Agent）
+    │   ├── FileEntry.java        # 清单中的单个文件条目（路径、哈希、大小）
+    │   ├── DownloadProgress.java # 单文件下载进度快照（工作线程 ↔ 界面）
+    │   ├── JsonParser.java       # 轻量 JSON 解析辅助（无外部依赖）
+    │   └── FormatUtil.java       # 格式化辅助（如下载速度）
+    ├── build.sh / build.bat    # 编译并打包两个 JAR
+    └── setup-agent.sh / setup-agent.bat  # 写入配置并追加 -javaagent 到 JVM 参数
 ```
 
 构建产物：

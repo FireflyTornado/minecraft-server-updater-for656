@@ -121,17 +121,33 @@ Paths ending with `/` match directories recursively; bare names match exact file
 
 ```
 ├── Dockerfile
+├── LICENSE
+├── README.md
+├── README_CN.md
 ├── server/
-│   ├── app.py                  # Flask API
+│   ├── app.py                  # Flask API (manifest, files, agent, config, health)
 │   ├── entrypoint.sh           # Container entrypoint
-│   ├── generate_manifest.py    # Manifest generator
+│   ├── generate_manifest.py    # Scans files, computes SHA-256, writes manifest JSON
 │   └── requirements.txt
-├── agent/
-│   ├── src/Launcher.java       # Launcher
-│   ├── src/UpdateAgent.java    # Core agent
-│   ├── META-INF/MANIFEST.MF
-│   ├── build.sh / build.bat    # Builds both JARs
-│   └── setup-agent.sh / setup-agent.bat
+└── agent/
+    ├── META-INF/MANIFEST.MF   # Premain-Class: Launcher
+    ├── src/
+    │   ├── Launcher.java         # -javaagent entry; swaps core JAR from .new, then loads it
+    │   ├── UpdateAgent.java      # Core entry (premain): config resolution + update flow
+    │   ├── UpdateApplication.java  # Flow control: wires service + GUI, gates Minecraft launch
+    │   ├── UpdateService.java    # Update logic: manifest, hashing, download, cleanup, self-update
+    │   ├── UpdateGUI.java        # Swing UI (status, progress, log, speed); SwingWorker + EDT
+    │   ├── UpdateListener.java   # Business→UI callback interface (no Swing dependency)
+    │   ├── UpdateResult.java     # Update outcome: updated / failed counts
+    │   ├── ServerClient.java     # HTTP client with multi-server fallback
+    │   ├── FileManager.java      # Path-safety, SHA-256, atomic replace, stale-file cleanup
+    │   ├── Manifest.java         # Parsed manifest model (files + managed/excluded paths + agent)
+    │   ├── FileEntry.java        # Single manifest file entry (path, hash, size)
+    │   ├── DownloadProgress.java # Per-file download progress snapshot (worker ↔ UI)
+    │   ├── JsonParser.java       # Lightweight JSON parsing helpers (no external deps)
+    │   └── FormatUtil.java       # Formatting helpers (e.g. download speed)
+    ├── build.sh / build.bat    # Compile + package both JARs
+    └── setup-agent.sh / setup-agent.bat  # Write config + append -javaagent to JVM args
 ```
 
 Build output:

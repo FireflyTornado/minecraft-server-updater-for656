@@ -14,7 +14,7 @@ set "CORE_JAR=%SCRIPT_DIR%UpdateAgent_core.jar"
 
 echo [build] Compiling...
 if not exist "%BUILD_DIR%" mkdir "%BUILD_DIR%"
-javac -d "%BUILD_DIR%" "%SRC_DIR%\Launcher.java" "%SRC_DIR%\UpdateAgent.java"
+javac -d "%BUILD_DIR%" "%SRC_DIR%\*.java"
 if %ERRORLEVEL% neq 0 (
     echo [build] Compilation failed!
     exit /b 1

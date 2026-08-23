@@ -14,7 +14,7 @@ CORE_JAR="$SCRIPT_DIR/UpdateAgent_core.jar"
 
 echo "[build] Compiling..."
 mkdir -p "$BUILD_DIR"
-javac -d "$BUILD_DIR" "$SRC_DIR/Launcher.java" "$SRC_DIR/UpdateAgent.java"
+javac -d "$BUILD_DIR" "$SRC_DIR"/*.java
 
 echo "[build] Packaging launcher JAR..."
 cd "$BUILD_DIR"
