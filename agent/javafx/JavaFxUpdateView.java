@@ -5,6 +5,7 @@ import javafx.animation.ScaleTransition;
 import javafx.application.Platform;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
+import javafx.geometry.Rectangle2D;
 import javafx.scene.Scene;
 import javafx.scene.control.Alert;
 import javafx.scene.control.Button;
@@ -21,6 +22,7 @@ import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
 import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
+import javafx.stage.Screen;
 import javafx.stage.Stage;
 import javafx.util.Duration;
 
@@ -390,6 +392,10 @@ class JavaFxUpdateView implements UpdateView {
     @Override
     public void open() {
         stage.show();
+        // Centre the window on the screen. The content-driven resize scheduled
+        // below re-centres it after any height change, so it stays centred from
+        // the very first frame (never flashes at the OS default top-left spot).
+        stage.centerOnScreen();
         // The debug window opens with Details already expanded; size the window
         // to its content so a fixed expanded height never leaves dead space.
         // applyWindowHeight defers the measurement to the next pulse.
@@ -990,7 +996,9 @@ class JavaFxUpdateView implements UpdateView {
      * of leaving dead space at the bottom; the collapsed window keeps its
      * deliberate short height as a floor. The Details pane animates nothing
      * (setAnimated(false)), so its expanded content height is exact at measure
-     * time.
+     * time. The final size is clamped to the visible screen and the window is
+     * re-centred (see {@link #fitWindowToScreen}), so expanding Details never
+     * pushes the window off-screen, at any DPI.
      */
     private void resizeToContent() {
         if (stage.getScene() == null || !stage.isShowing()) {
@@ -1006,9 +1014,62 @@ class JavaFxUpdateView implements UpdateView {
         double width = scene.getWidth();
         double pref = width > 0 ? scene.getRoot().prefHeight(width) : scene.getRoot().prefHeight(-1);
         double target = Math.max(pref, WINDOW_HEIGHT_COLLAPSED) + chrome;
-        if (Math.abs(stage.getHeight() - target) > 1.0) {
-            stage.setHeight(target);
+        fitWindowToScreen(target);
+    }
+
+    /**
+     * Size the window to the given total height (content + chrome) and keep it
+     * centred on the screen that currently contains it. The height is clamped
+     * to the visible screen with a small margin, so an expanded Details pane
+     * never leaves the visible screen — even at high DPI or on a small logical
+     * screen (the measurements here are in JavaFX logical pixels, so the clamp
+     * is DPI-invariant). A deliberately off-screen window (the dev screenshot
+     * harness) is resized but never yanked back onto the visible screen.
+     */
+    private void fitWindowToScreen(double targetHeight) {
+        Rectangle2D bounds = currentScreenVisualBounds();
+        double margin = 24;
+        double maxHeight = Math.max(WINDOW_HEIGHT_COLLAPSED, bounds.getHeight() - margin);
+        double maxWidth = Math.max(WINDOW_WIDTH, bounds.getWidth() - margin);
+        double chrome = windowChrome();
+        double collapsed = WINDOW_HEIGHT_COLLAPSED + chrome;
+        double h = Math.min(Math.max(targetHeight, collapsed), maxHeight);
+        double w = Math.min(stage.getWidth(), maxWidth);
+        if (Math.abs(stage.getHeight() - h) > 1.0) {
+            stage.setHeight(h);
         }
+        if (Math.abs(stage.getWidth() - w) > 1.0) {
+            stage.setWidth(w);
+        }
+        if (bounds.contains(stage.getX() + stage.getWidth() / 2.0,
+                            stage.getY() + stage.getHeight() / 2.0)) {
+            double x = bounds.getMinX() + (bounds.getWidth() - stage.getWidth()) / 2.0;
+            double y = bounds.getMinY() + (bounds.getHeight() - stage.getHeight()) / 2.0;
+            if (Math.abs(stage.getX() - x) > 1.0) {
+                stage.setX(x);
+            }
+            if (Math.abs(stage.getY() - y) > 1.0) {
+                stage.setY(y);
+            }
+        }
+    }
+
+    /**
+     * The visible bounds of the screen that currently contains the window's
+     * centre, falling back to the primary screen (e.g. before the window has a
+     * real position).
+     */
+    private Rectangle2D currentScreenVisualBounds() {
+        Screen screen = Screen.getPrimary();
+        double cx = stage.getX() + stage.getWidth() / 2.0;
+        double cy = stage.getY() + stage.getHeight() / 2.0;
+        for (Screen s : Screen.getScreens()) {
+            if (s.getVisualBounds().contains(cx, cy)) {
+                screen = s;
+                break;
+            }
+        }
+        return screen.getVisualBounds();
     }
 
     /**

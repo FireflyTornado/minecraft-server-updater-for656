@@ -127,7 +127,9 @@
 .file-path {
     -fx-font-size: 13px;
     -fx-text-fill: #A8B0BA;
-    -fx-text-overrun: ellipsis;
+    /* Leading ellipsis: a long path truncates at the head so the file name at
+       the end of the path — the useful part — stays visible. */
+    -fx-text-overrun: leading-ellipsis;
 }
 
 .file-progress {

@@ -153,10 +153,17 @@ public class UpdateAgent {
     private static Map<String, String> parseAgentArgs(String args) {
         Map<String, String> map = new LinkedHashMap<>();
         if (args != null && !args.isEmpty()) {
+            String lastKey = null;
             for (String token : args.split(",")) {
                 String[] kv = token.split("=", 2);
                 if (kv.length == 2) {
-                    map.put(kv[0].trim(), kv[1].trim());
+                    lastKey = kv[0].trim();
+                    map.put(lastKey, kv[1].trim());
+                } else if (lastKey != null) {
+                    // A bare token (no '=') continues the previous key's value —
+                    // e.g. "server=url1,url2" must parse as server="url1,url2",
+                    // not as two tokens (the documented multi-server fallback).
+                    map.put(lastKey, map.get(lastKey) + "," + token.trim());
                 }
             }
         }
