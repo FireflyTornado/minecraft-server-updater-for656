@@ -164,6 +164,6 @@ class FileManager {
     }
 
     private void log(String msg) {
-        if (listener != null) listener.onLog(msg);
+        if (listener != null) listener.onUpdateEvent(new UpdateEvent.LogMessage(msg));
     }
 }

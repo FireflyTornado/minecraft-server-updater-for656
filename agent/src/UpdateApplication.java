@@ -6,19 +6,28 @@ import java.util.concurrent.CountDownLatch;
  * Application flow control for the update check.
  *
  * Owns the {@link CountDownLatch} that gates the Minecraft launch and decides
- * what happens after the update finishes — release the latch, close the window
- * or terminate the JVM. Wires the {@link UpdateService} and the
- * {@link UpdateGUI} together. Contains no Swing dependency.
+ * everything that happens after the update finishes — whether to release the
+ * latch, when (immediately or after a short delay), whether to close the view,
+ * and when to terminate the JVM after a failure. Also owns window visibility:
+ * it opens the view via {@link UpdateView#open()} and closes it via
+ * {@link UpdateView#close()}. Wires the
+ * {@link UpdateService}, the {@link UpdateView} and the {@link UpdateController}
+ * together and receives completion callbacks from the controller. Implements
+ * the {@link UpdateViewListener} user-action callback so the view forwards
+ * window-close / close-button operations without ever referencing this class.
+ * Contains no Swing dependency: the {@link UpdateController} marshals events
+ * onto the UI thread through a {@link UiDispatcher}, delayed actions run on
+ * background threads, and view log / close calls are marshalled the same way.
  */
-class UpdateApplication {
+class UpdateApplication implements UpdateViewListener {
 
     private final String gameDir;
     private final List<String> serverUrls;
     private final boolean debug;
     private final CountDownLatch latch;
 
-    private UpdateGUI gui;
-    private UpdateService service;
+    private UpdateView view;
+    private UiDispatcher dispatcher;
 
     UpdateApplication(String gameDir, String serverConfig, boolean debug, CountDownLatch latch) {
         this.gameDir = gameDir;
@@ -27,67 +36,76 @@ class UpdateApplication {
         this.latch = latch;
     }
 
-    /** Create the service and the GUI and start the update. Must run on the EDT. */
+    /** Create the service, view and controller and start the update. Must run on the EDT. */
     void start() {
-        service = new UpdateService(gameDir, serverUrls);
-        gui = new UpdateGUI(this, service, gameDir, debug);
-        gui.start();
+        UpdateService service = new UpdateService(gameDir, serverUrls);
+        view = new UpdateGUI(this, new UiModel(gameDir, debug));
+        dispatcher = new SwingUiDispatcher();
+        new UpdateController(service, view, dispatcher, this).start();
+        // The application flow decides when to display the view.
+        view.open();
     }
 
-    /** The user closed the window (e.g. in debug mode) — release the latch. */
-    void onWindowClosed() {
+    /** The user closed the window — release the latch so Minecraft can start. */
+    @Override
+    public void onWindowClosed() {
         latch.countDown();
     }
 
     /** The user pressed the debug Close button — release the latch and close the window. */
-    void onCloseRequested() {
+    @Override
+    public void onCloseRequested() {
         latch.countDown();
-        gui.disposeWindow();
+        // Closing the window is a flow decision; the view only forwards the press.
+        view.close();
     }
 
-    /** The update completed without an exception. */
+    /**
+     * The update completed. Failed files kill the process; otherwise release the
+     * latch so Minecraft can start. All delays and window management live here,
+     * not in the view. Runs on the UI thread.
+     */
     void onUpdateFinished(UpdateResult result) {
-        gui.setOverallProgress(100);
         if (result.failed > 0) {
-            gui.setStatus("Update finished with " + result.failed + " error(s)", false);
-            gui.appendLog("[FATAL] " + result.failed
+            view.showLog("[FATAL] " + result.failed
                     + " file(s) failed to update, killing Minecraft process...");
-            gui.scheduleOnEdt(() -> System.exit(1), 2000);
-        } else if (result.updated > 0) {
-            gui.setStatus("Updated " + result.updated + " file(s), launching Minecraft...", false);
-            finishSuccess(2000);
-        } else {
-            gui.setStatus("Already up to date, launching Minecraft...", false);
-            finishSuccess(1000);
-        }
-    }
-
-    /** The update threw an exception — show the error and terminate the JVM. */
-    void onUpdateError(String message, Throwable cause) {
-        cause.printStackTrace();
-        gui.stopRefreshTimer();
-        gui.resetDownloadProgressBar();
-        gui.appendLog("[ERROR] " + message);
-        gui.setStatus("Update failed", false);
-        gui.setProgress(0);
-        gui.showErrorDialog(message);
-        gui.appendLog("[FATAL] Killing Minecraft process...");
-        gui.scheduleOnEdt(() -> System.exit(1), 1000);
-    }
-
-    /** Successful completion: release the latch so Minecraft can start. */
-    private void finishSuccess(int delayMs) {
-        if (debug) {
-            // Debug mode: release latch so Minecraft starts, but keep window open
+            delayThen(2000, () -> System.exit(1));
+        } else if (debug) {
+            // Release now; the window stays open for inspection.
             latch.countDown();
-            gui.setCloseButtonEnabled(true);
-            gui.appendLog("[DEBUG] Update check done. Window stays open for inspection.");
         } else {
-            gui.scheduleOnEdt(() -> {
+            long delay = result.updated > 0 ? 2000 : 1000;
+            delayThen(delay, () -> {
                 latch.countDown();
-                gui.disposeWindow();
-            }, delayMs);
+                dispatcher.invoke(view::close);
+            });
         }
+    }
+
+    /**
+     * The update threw an exception — print the stack trace and terminate the
+     * JVM after a short grace period so the error stays visible. Runs on the
+     * UI thread.
+     */
+    void onUpdateError(Throwable cause) {
+        cause.printStackTrace();
+        view.showLog("[FATAL] Killing Minecraft process...");
+        delayThen(1000, () -> System.exit(1));
+    }
+
+    /** Run an action once after a delay on a daemon thread. No Swing involved. */
+    private static void delayThen(long delayMs, Runnable action) {
+        Thread thread = new Thread(() -> {
+            try {
+                Thread.sleep(delayMs);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+            action.run();
+        }, "update-flow");
+        thread.setDaemon(true);
+        thread.start();
     }
 
     /** Parse comma-separated server URLs, trimming whitespace from each. */

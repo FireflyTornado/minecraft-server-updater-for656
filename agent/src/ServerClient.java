@@ -13,10 +13,14 @@ import java.util.List;
 /**
  * HTTP client for the update server with multi-server fallback.
  *
- * Tracks the currently active server and reports log lines and server
- * switches through an {@link UpdateListener}. Contains no Swing dependency.
+ * Tracks the currently active server and reports log lines, server switches
+ * and per-download progress through {@link UpdateListener} events. Contains no
+ * Swing dependency.
  */
 class ServerClient {
+
+    /** Emit a download-progress event at most this often while streaming. */
+    private static final long PROGRESS_EMIT_INTERVAL_MS = 500;
 
     private final List<String> serverUrls;
     private UpdateListener listener;
@@ -54,9 +58,7 @@ class ServerClient {
                 String result = httpGet(url);
                 // Success — switch to this server for subsequent requests
                 if (idx != currentServerIndex) {
-                    log("Switched to server: " + serverUrls.get(idx));
-                    currentServerIndex = idx;
-                    if (listener != null) listener.onServerChanged();
+                    switchToServer(idx);
                 }
                 return result;
             } catch (IOException e) {
@@ -86,7 +88,7 @@ class ServerClient {
     }
 
     /** HTTP download with fallback: try each server in order until one succeeds. */
-    boolean httpDownloadWithFallback(String path, File dest, DownloadProgress progress) {
+    boolean httpDownloadWithFallback(String path, File dest) {
         int startIndex = currentServerIndex;
         for (int i = 0; i < serverUrls.size(); i++) {
             int idx = (startIndex + i) % serverUrls.size();
@@ -94,12 +96,10 @@ class ServerClient {
             if (idx != currentServerIndex) {
                 log("Trying server: " + serverUrls.get(idx));
             }
-            if (httpDownload(url, dest, progress)) {
+            if (httpDownload(url, dest)) {
                 // Success — switch to this server for subsequent requests
                 if (idx != currentServerIndex) {
-                    log("Switched to server: " + serverUrls.get(idx));
-                    currentServerIndex = idx;
-                    if (listener != null) listener.onServerChanged();
+                    switchToServer(idx);
                 }
                 return true;
             }
@@ -108,29 +108,61 @@ class ServerClient {
         return false;
     }
 
-    private boolean httpDownload(String urlStr, File dest, DownloadProgress progress) {
+    private boolean httpDownload(String urlStr, File dest) {
         try {
             HttpURLConnection conn = (HttpURLConnection) URI.create(urlStr).toURL().openConnection();
             conn.setRequestMethod("GET");
             conn.setConnectTimeout(10000);
             conn.setReadTimeout(60000);
             // Use Content-Length from server if available (more accurate)
-            int contentLength = conn.getContentLength();
-            if (contentLength > 0) progress.totalBytes = contentLength;
+            long total = conn.getContentLength();
+            long downloaded = 0;
+            long lastEmitAt = System.currentTimeMillis();
+            long lastBytes = 0;
             try (InputStream in = conn.getInputStream();
                  FileOutputStream out = new FileOutputStream(dest)) {
                 byte[] buf = new byte[8192];
                 int n;
                 while ((n = in.read(buf)) != -1) {
                     out.write(buf, 0, n);
-                    progress.downloadedBytes += n;
+                    downloaded += n;
+                    long now = System.currentTimeMillis();
+                    if (now - lastEmitAt >= PROGRESS_EMIT_INTERVAL_MS) {
+                        emitProgress(downloaded, total,
+                                (downloaded - lastBytes) * 1000.0 / (now - lastEmitAt));
+                        lastEmitAt = now;
+                        lastBytes = downloaded;
+                    }
                 }
             } finally {
                 conn.disconnect();
             }
+            // Final snapshot so the UI sees 100% / total
+            long now = System.currentTimeMillis();
+            double finalSpeed = (now - lastEmitAt) > 0
+                    ? (downloaded - lastBytes) * 1000.0 / (now - lastEmitAt)
+                    : 0;
+            emitProgress(downloaded, total, finalSpeed);
             return true;
         } catch (IOException e) {
             return false;
+        }
+    }
+
+    /** Emit a download-progress event carrying the speed computed here. */
+    private void emitProgress(long downloaded, long total, double speed) {
+        if (listener != null) {
+            listener.onUpdateEvent(new UpdateEvent.DownloadProgressChanged(
+                    DownloadProgress.active(downloaded, total, speed)));
+        }
+    }
+
+    /** Record a fallback switch and tell listeners about the new server state. */
+    private void switchToServer(int newIndex) {
+        log("Switched to server: " + serverUrls.get(newIndex));
+        currentServerIndex = newIndex;
+        if (listener != null) {
+            listener.onUpdateEvent(new UpdateEvent.ServerChanged(serverUrls, getCurrentServer()));
         }
     }
 
@@ -145,6 +177,6 @@ class ServerClient {
     }
 
     private void log(String msg) {
-        if (listener != null) listener.onLog(msg);
+        if (listener != null) listener.onUpdateEvent(new UpdateEvent.LogMessage(msg));
     }
 }

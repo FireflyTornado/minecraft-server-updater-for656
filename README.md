@@ -132,20 +132,27 @@ Paths ending with `/` match directories recursively; bare names match exact file
 └── agent/
     ├── META-INF/MANIFEST.MF   # Premain-Class: Launcher
     ├── src/
-    │   ├── Launcher.java         # -javaagent entry; swaps core JAR from .new, then loads it
-    │   ├── UpdateAgent.java      # Core entry (premain): config resolution + update flow
-    │   ├── UpdateApplication.java  # Flow control: wires service + GUI, gates Minecraft launch
-    │   ├── UpdateService.java    # Update logic: manifest, hashing, download, cleanup, self-update
-    │   ├── UpdateGUI.java        # Swing UI (status, progress, log, speed); SwingWorker + EDT
-    │   ├── UpdateListener.java   # Business→UI callback interface (no Swing dependency)
-    │   ├── UpdateResult.java     # Update outcome: updated / failed counts
-    │   ├── ServerClient.java     # HTTP client with multi-server fallback
-    │   ├── FileManager.java      # Path-safety, SHA-256, atomic replace, stale-file cleanup
-    │   ├── Manifest.java         # Parsed manifest model (files + managed/excluded paths + agent)
-    │   ├── FileEntry.java        # Single manifest file entry (path, hash, size)
-    │   ├── DownloadProgress.java # Per-file download progress snapshot (worker ↔ UI)
-    │   ├── JsonParser.java       # Lightweight JSON parsing helpers (no external deps)
-    │   └── FormatUtil.java       # Formatting helpers (e.g. download speed)
+    │   ├── Launcher.java           # -javaagent entry; swaps core JAR from .new, then loads it
+    │   ├── UpdateAgent.java        # Core entry (premain): config resolution + update flow
+    │   ├── UpdateApplication.java  # Flow control: wires service + view + controller; implements UpdateViewListener; owns when the view opens/closes
+    │   ├── UpdateController.java   # Runs update on a worker thread; translates UpdateEvents into UpdateView calls
+    │   ├── UpdateService.java      # Update logic: manifest, hashing, download, cleanup, self-update; emits UpdateEvents
+    │   ├── UpdateEvent.java        # Unified business event model (no Swing dependency)
+    │   ├── UpdateListener.java     # Business→UI event callback interface (no Swing dependency)
+    │   ├── UpdateView.java         # Toolkit-agnostic UI contract (open/close/status/...; no Swing/JavaFX types)
+    │   ├── UpdateViewListener.java # View→application user-action callback (window close / debug close)
+    │   ├── UpdateGUI.java          # Swing UI (status, progress, log, speed); implements UpdateView; opened/closed by the application flow
+    │   ├── UiModel.java            # Immutable display data handed to the UI
+    │   ├── UiDispatcher.java       # "Run on UI thread" abstraction over the UI toolkit
+    │   ├── SwingUiDispatcher.java  # UiDispatcher backed by Swing's EDT
+    │   ├── UpdateResult.java       # Update outcome: updated / failed counts
+    │   ├── ServerClient.java       # HTTP client with multi-server fallback
+    │   ├── FileManager.java        # Path-safety, SHA-256, atomic replace, stale-file cleanup
+    │   ├── Manifest.java           # Parsed manifest model (files + managed/excluded paths + agent)
+    │   ├── FileEntry.java          # Single manifest file entry (path, hash, size)
+    │   ├── DownloadProgress.java   # Per-file download progress snapshot (worker ↔ UI)
+    │   ├── JsonParser.java         # Lightweight JSON parsing helpers (no external deps)
+    │   └── FormatUtil.java         # Formatting helpers (e.g. download speed)
     ├── build.sh / build.bat    # Compile + package both JARs
     └── setup-agent.sh / setup-agent.bat  # Write config + append -javaagent to JVM args
 ```

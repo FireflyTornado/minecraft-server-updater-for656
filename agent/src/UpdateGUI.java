@@ -4,16 +4,21 @@ import java.awt.*;
 import java.util.List;
 
 /**
- * Swing UI for the update check. Only responsible for UI presentation and
- * user interaction: it displays status, overall and per-file download
- * progress and the update log, and forwards user actions to the
- * {@link UpdateApplication}.
+ * Swing UI for the update check. Pure View: it creates and lays out the
+ * components, renders presentation from {@link UpdateView} callbacks and
+ * forwards user actions (window close, close button) to a
+ * {@link UpdateViewListener} — it never references the application that owns
+ * the flow. It makes no application-flow decisions — delays, releasing the
+ * latch, closing the window and JVM exit are all owned by the application —
+ * and owns no threads.
  *
- * Implements {@link UpdateListener} so the update service can report events
- * without depending on Swing; this class marshals those callbacks onto the
- * EDT through the background {@link SwingWorker}.
+ * Implements the toolkit-agnostic {@link UpdateView} contract. All methods must
+ * be called on the Event Dispatch Thread; the {@link UpdateController}
+ * guarantees this by marshalling through a {@link UiDispatcher}. It holds no
+ * reference to the {@link UpdateService} and never queries business state —
+ * everything displayed arrives through the view callbacks.
  */
-class UpdateGUI extends JFrame implements UpdateListener {
+class UpdateGUI extends JFrame implements UpdateView {
 
     private final JLabel     lblStatus    = new JLabel("Checking for updates...");
     private final JProgressBar progressBar = new JProgressBar(0, 100);
@@ -24,218 +29,148 @@ class UpdateGUI extends JFrame implements UpdateListener {
     private final JProgressBar dlProgressBar = new JProgressBar(0, 100);
     private final JLabel       lblDlSpeed    = new JLabel(" ");
 
-    // Per-file download UI refresh timer (500ms) — reads service download progress
-    private final javax.swing.Timer dlRefreshTimer = new javax.swing.Timer(500, e -> refreshDownloadUI());
-    private long dlLastBytes = 0;
-    private long dlLastTime  = 0;
-
-    private final UpdateApplication app;
-    private final UpdateService service;
-    private final String gameDir;
+    private final JLabel serverLabel = new JLabel();
+    private final UpdateViewListener listener;
     private final boolean debug;
-    private JLabel serverLabel;
-    private UpdateWorker updateWorker;
 
-    private enum UiEventType {
-        STATUS, LOG, OVERALL_PROGRESS, RESET_DOWNLOAD_PROGRESS, SERVER_LABEL
+    UpdateGUI(UpdateViewListener listener, UiModel model) {
+        this.listener = listener;
+        this.debug = model.debug;
+        initUI(model);
     }
 
-    /** A background-to-EDT message. UI components are only changed in process(). */
-    private static final class UiEvent {
-        final UiEventType type;
-        final String text;
-        final boolean indeterminate;
-        final int progress;
+    // ── UpdateView ────────────────────────────────────────────────
 
-        private UiEvent(UiEventType type, String text, boolean indeterminate, int progress) {
-            this.type = type;
-            this.text = text;
-            this.indeterminate = indeterminate;
-            this.progress = progress;
-        }
-
-        static UiEvent status(String text, boolean indeterminate) {
-            return new UiEvent(UiEventType.STATUS, text, indeterminate, 0);
-        }
-
-        static UiEvent log(String text) {
-            return new UiEvent(UiEventType.LOG, text, false, 0);
-        }
-
-        static UiEvent overallProgress(int progress) {
-            return new UiEvent(UiEventType.OVERALL_PROGRESS, null, false, progress);
-        }
-
-        static UiEvent serverLabel(String text) {
-            return new UiEvent(UiEventType.SERVER_LABEL, text, false, 0);
-        }
-
-        static UiEvent resetDownloadProgress() {
-            return new UiEvent(UiEventType.RESET_DOWNLOAD_PROGRESS, null, false, 0);
-        }
-    }
-
-    UpdateGUI(UpdateApplication app, UpdateService service, String gameDir, boolean debug) {
-        this.app = app;
-        this.service = service;
-        this.gameDir = gameDir;
-        this.debug = debug;
-        initUI();
-        setVisible(true);
-    }
-
-    /** Start the background update worker. Must run on the EDT. */
-    void start() {
-        dlRefreshTimer.start();
-        updateWorker = new UpdateWorker();
-        updateWorker.execute();
-    }
-
-    // ── UpdateListener (called on the worker thread) ───────────────
-
+    /** Update the status text and whether the overall bar is indeterminate. */
     @Override
-    public void onStatus(String status, boolean indeterminate) {
-        setStatus(status, indeterminate);
+    public void showStatus(String status, boolean indeterminate) {
+        lblStatus.setText(status);
+        progressBar.setIndeterminate(indeterminate);
     }
 
+    /** Append one log line. */
     @Override
-    public void onLog(String message) {
+    public void showLog(String message) {
         appendLog(message);
     }
 
+    /** Set the overall progress percentage (0-100). */
     @Override
-    public void onOverallProgress(int percent) {
-        setOverallProgress(percent);
-    }
-
-    @Override
-    public void onServerChanged() {
-        refreshServerLabel();
-    }
-
-    @Override
-    public void onDownloadStarted() {
-        // Reset the per-file download speed baseline at the start of a download
-        dlLastBytes = 0;
-        dlLastTime = System.currentTimeMillis();
-    }
-
-    @Override
-    public void onDownloadComplete() {
-        resetDownloadProgressBar();
-    }
-
-    // ── Public UI operations used by the application flow layer ─────
-
-    /** Set the status text and whether the overall bar is indeterminate. */
-    void setStatus(String text, boolean indeterminate) {
-        dispatchUiEvent(UiEvent.status(text, indeterminate));
-    }
-
-    /** Append a line to the log area. */
-    void appendLog(String msg) {
-        dispatchUiEvent(UiEvent.log(msg));
-    }
-
-    /** Set the overall progress bar to a determinate percentage. */
-    void setOverallProgress(int value) {
-        dispatchUiEvent(UiEvent.overallProgress(value));
-    }
-
-    /** Stop the per-file download refresh timer. Must run on the EDT. */
-    void stopRefreshTimer() {
-        dlRefreshTimer.stop();
-    }
-
-    /** Reset the per-file download progress bar and speed label. */
-    void resetDownloadProgressBar() {
-        dispatchUiEvent(UiEvent.resetDownloadProgress());
-    }
-
-    /** Set the overall progress bar value (determinate). Must run on the EDT. */
-    void setProgress(int value) {
+    public void showOverallProgress(int percent) {
         progressBar.setIndeterminate(false);
-        progressBar.setValue(value);
+        progressBar.setValue(clamp(percent));
     }
 
-    /** Show a modal error dialog. Must run on the EDT. */
-    void showErrorDialog(String message) {
+    /** Present a per-file download snapshot. */
+    @Override
+    public void showDownloadProgress(DownloadProgress progress) {
+        if (!progress.active) {
+            resetDownloadProgressBar();
+            return;
+        }
+        if (progress.totalBytes > 0) {
+            int pct = clamp((int) (progress.downloadedBytes * 100 / progress.totalBytes));
+            dlProgressBar.setValue(pct);
+            dlProgressBar.setString(pct + "%");
+            dlProgressBar.setIndeterminate(false);
+        } else {
+            dlProgressBar.setIndeterminate(true);
+            dlProgressBar.setString("");
+        }
+        lblDlSpeed.setText(FormatUtil.formatSpeed(progress.bytesPerSecond));
+    }
+
+    /** Present the server state carried by the event. */
+    @Override
+    public void showServer(List<String> serverUrls, String currentServer) {
+        serverLabel.setText(serverUrls.size() <= 1
+                ? "Server: " + currentServer
+                : "Servers (" + serverUrls.size() + "): " + currentServer);
+    }
+
+    /**
+     * The update completed — render the final state. Flow control after
+     * completion is the application's job.
+     */
+    @Override
+    public void showCompleted(UpdateResult result) {
+        progressBar.setIndeterminate(false);
+        progressBar.setValue(100);
+        resetDownloadProgressBar();
+
+        if (result.failed > 0) {
+            lblStatus.setText("Update finished with " + result.failed + " error(s)");
+        } else {
+            lblStatus.setText(result.updated > 0
+                    ? "Updated " + result.updated + " file(s), launching Minecraft..."
+                    : "Already up to date, launching Minecraft...");
+            if (debug) {
+                setCloseEnabled(true);
+                appendLog("[DEBUG] Update check done. Window stays open for inspection.");
+            }
+        }
+    }
+
+    /**
+     * The update failed — render the error and show a dialog. Flow control
+     * after the failure is the application's job.
+     */
+    @Override
+    public void showError(String message, Throwable cause) {
+        lblStatus.setText("Update failed");
+        progressBar.setIndeterminate(false);
+        progressBar.setValue(0);
+        resetDownloadProgressBar();
+        appendLog("[ERROR] " + message);
         JOptionPane.showMessageDialog(this, message, "Update Error", JOptionPane.ERROR_MESSAGE);
     }
 
-    /** Enable/disable the debug Close button. Must run on the EDT. */
-    void setCloseButtonEnabled(boolean enabled) {
+    /** Enable or disable the close button (used in debug mode). */
+    @Override
+    public void setCloseEnabled(boolean enabled) {
         btnClose.setEnabled(enabled);
     }
 
-    /** Close the window. Must run on the EDT. */
-    void disposeWindow() {
+    /** Open the window. Must be called on the EDT. */
+    @Override
+    public void open() {
+        setVisible(true);
+    }
+
+    /** Close the window. Must be called on the EDT. */
+    @Override
+    public void close() {
         dispose();
     }
 
-    /** Run an action on the EDT after a delay (e.g. delayed exit). Must run on the EDT. */
-    void scheduleOnEdt(Runnable action, int delayMs) {
-        new javax.swing.Timer(delayMs, e -> action.run()).start();
+    // ── Helpers ───────────────────────────────────────────────────
+
+    private static int clamp(int value) {
+        return Math.max(0, Math.min(100, value));
     }
 
-    // ── EDT event plumbing ─────────────────────────────────────────
-
-    /** Run a UI mutation on Swing's Event Dispatch Thread. */
-    private void runOnEdt(Runnable action) {
-        if (SwingUtilities.isEventDispatchThread()) {
-            action.run();
-        } else {
-            SwingUtilities.invokeLater(action);
-        }
+    private void resetDownloadProgressBar() {
+        dlProgressBar.setValue(0);
+        dlProgressBar.setString("");
+        lblDlSpeed.setText(" ");
     }
 
-    /** Deliver an event through SwingWorker when called from its worker thread. */
-    private void dispatchUiEvent(UiEvent event) {
-        UpdateWorker worker = updateWorker;
-        if (worker != null && !SwingUtilities.isEventDispatchThread() && !worker.isDone()) {
-            worker.emit(event);
-        } else {
-            runOnEdt(() -> applyUiEvent(event));
-        }
+    private void appendLog(String msg) {
+        logArea.append(msg + "\n");
+        logArea.setCaretPosition(logArea.getDocument().getLength());
     }
 
-    /** Apply a UI event. This method must run on the EDT. */
-    private void applyUiEvent(UiEvent event) {
-        switch (event.type) {
-            case STATUS:
-                lblStatus.setText(event.text);
-                progressBar.setIndeterminate(event.indeterminate);
-                break;
-            case LOG:
-                logArea.append(event.text + "\n");
-                logArea.setCaretPosition(logArea.getDocument().getLength());
-                break;
-            case OVERALL_PROGRESS:
-                progressBar.setIndeterminate(false);
-                progressBar.setValue(Math.max(0, Math.min(100, event.progress)));
-                break;
-            case RESET_DOWNLOAD_PROGRESS:
-                dlProgressBar.setValue(0);
-                dlProgressBar.setString("");
-                lblDlSpeed.setText(" ");
-                break;
-            case SERVER_LABEL:
-                serverLabel.setText(event.text);
-                break;
-        }
-    }
-
-    private void initUI() {
+    private void initUI(UiModel model) {
         setTitle("Minecraft Update Check");
         setDefaultCloseOperation(JFrame.DISPOSE_ON_CLOSE);
         setSize(520, 420);
         setLocationRelativeTo(null);
         setResizable(false);
 
-        // Release the latch via the application so Minecraft can start
+        // Forward the close to the flow controller so Minecraft can start
         addWindowListener(new java.awt.event.WindowAdapter() {
             public void windowClosed(java.awt.event.WindowEvent e) {
-                app.onWindowClosed();
+                listener.onWindowClosed();
             }
         });
 
@@ -246,10 +181,8 @@ class UpdateGUI extends JFrame implements UpdateListener {
 
         // Top info
         JPanel topPanel = new JPanel(new GridLayout(2, 1, 4, 4));
-        serverLabel = new JLabel();
-        refreshServerLabel();
         topPanel.add(serverLabel);
-        topPanel.add(new JLabel("Game dir: " + gameDir));
+        topPanel.add(new JLabel("Game dir: " + model.gameDir));
         root.add(topPanel, BorderLayout.NORTH);
 
         // Center: progress area + log
@@ -294,80 +227,10 @@ class UpdateGUI extends JFrame implements UpdateListener {
         // Close button (only shown in debug mode; otherwise window auto-closes)
         if (debug) {
             JPanel bottom = new JPanel(new FlowLayout(FlowLayout.RIGHT));
-            btnClose.setEnabled(false);
-            btnClose.addActionListener(e -> app.onCloseRequested());
+            setCloseEnabled(false);
+            btnClose.addActionListener(e -> listener.onCloseRequested());
             bottom.add(btnClose);
             root.add(bottom, BorderLayout.SOUTH);
-        }
-    }
-
-    /** Refresh the server label from the service's current server. */
-    private void refreshServerLabel() {
-        String display = service.getServerUrls().size() <= 1
-                ? "Server: " + service.getCurrentServer()
-                : "Servers (" + service.getServerUrls().size() + "): " + service.getCurrentServer();
-        dispatchUiEvent(UiEvent.serverLabel(display));
-    }
-
-    // ── Per-file download UI refresh ────────────────────────────────
-
-    private void refreshDownloadUI() {
-        DownloadProgress p = service.getDownloadProgress();
-        if (!p.active) {
-            dlProgressBar.setValue(0);
-            dlProgressBar.setString("");
-            lblDlSpeed.setText(" ");
-            return;
-        }
-        long total = p.totalBytes;
-        long done  = p.downloadedBytes;
-        if (total > 0) {
-            int pct = (int) (done * 100 / total);
-            if (pct > 100) pct = 100;
-            dlProgressBar.setValue(pct);
-            dlProgressBar.setString(pct + "%");
-            dlProgressBar.setIndeterminate(false);
-        } else {
-            dlProgressBar.setIndeterminate(true);
-            dlProgressBar.setString("");
-        }
-        long now = System.currentTimeMillis();
-        long elapsed = now - dlLastTime;
-        if (elapsed >= 400) {
-            long bytesDelta = done - dlLastBytes;
-            double speed = elapsed > 0 ? bytesDelta * 1000.0 / elapsed : 0;
-            lblDlSpeed.setText(FormatUtil.formatSpeed(speed));
-            dlLastBytes = done;
-            dlLastTime  = now;
-        }
-    }
-
-    /** Performs the blocking update work; UI events are published to the EDT. */
-    private final class UpdateWorker extends SwingWorker<UpdateResult, UiEvent> {
-        void emit(UiEvent event) {
-            publish(event);
-        }
-
-        @Override
-        protected UpdateResult doInBackground() throws Exception {
-            return service.run(UpdateGUI.this);
-        }
-
-        @Override
-        protected void process(List<UiEvent> events) {
-            for (UiEvent event : events) applyUiEvent(event);
-        }
-
-        @Override
-        protected void done() {
-            stopRefreshTimer();
-            try {
-                UpdateResult result = get();
-                app.onUpdateFinished(result);
-            } catch (Exception e) {
-                Throwable cause = e.getCause() != null ? e.getCause() : e;
-                app.onUpdateError("Update error: " + cause.getMessage(), cause);
-            }
         }
     }
 }

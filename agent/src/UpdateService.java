@@ -11,8 +11,10 @@ import java.util.List;
  * and SHA-256 verifies those that differ, replaces them atomically, cleans
  * stale files and performs the agent self-update.
  *
- * Runs synchronously on the caller's thread and reports status, progress and
- * log messages through an {@link UpdateListener}. Contains no Swing dependency.
+ * Runs synchronously on the caller's thread and reports every state change,
+ * progress update and log line as an {@link UpdateEvent} delivered to an
+ * {@link UpdateListener}. Contains no Swing dependency and never touches the
+ * UI — it only produces business events.
  */
 class UpdateService {
 
@@ -20,7 +22,6 @@ class UpdateService {
     private final List<String> serverUrls;
     private final ServerClient client;
     private final FileManager fileManager;
-    private final DownloadProgress downloadProgress = new DownloadProgress();
 
     UpdateService(String gameDir, List<String> serverUrls) {
         this.gameDir = gameDir;
@@ -29,25 +30,29 @@ class UpdateService {
         this.fileManager = new FileManager(gameDir);
     }
 
-    List<String> getServerUrls() {
-        return serverUrls;
-    }
-
-    /** Get the currently active server URL (after any fallback). */
-    String getCurrentServer() {
-        return client.getCurrentServer();
-    }
-
-    /** Per-file download progress snapshot, polled by the UI. */
-    DownloadProgress getDownloadProgress() {
-        return downloadProgress;
-    }
-
-    /** Run the full update flow, reporting events to the given listener. */
-    UpdateResult run(UpdateListener listener) throws Exception {
+    /**
+     * Run the full update flow. Every step is reported to the listener as an
+     * {@link UpdateEvent}; a successful run ends with a
+     * {@link UpdateEvent.Completed}, an unexpected failure with a
+     * {@link UpdateEvent.Failed}. Never throws.
+     */
+    UpdateResult run(UpdateListener listener) {
         client.setListener(listener);
         fileManager.setListener(listener);
 
+        try {
+            UpdateResult result = runFlow(listener);
+            emit(listener, new UpdateEvent.Completed(result));
+            return result;
+        } catch (Exception e) {
+            String message = e.getMessage() != null ? e.getMessage() : e.toString();
+            emit(listener, new UpdateEvent.Failed(message, e));
+            return null;
+        }
+    }
+
+    private UpdateResult runFlow(UpdateListener listener) throws Exception {
+        emit(listener, new UpdateEvent.ServerChanged(serverUrls, client.getCurrentServer()));
         log(listener, "Servers (" + serverUrls.size() + "):");
         for (int i = 0; i < serverUrls.size(); i++) {
             log(listener, "  [" + (i + 1) + "] " + serverUrls.get(i));
@@ -55,7 +60,7 @@ class UpdateService {
         log(listener, "Game dir: " + gameDir);
 
         // 1. fetch manifest (with multi-server fallback)
-        listener.onStatus("Checking for updates...", true);
+        emit(listener, new UpdateEvent.StatusChanged("Checking for updates...", true));
         log(listener, "Fetching manifest...");
         String manifestJson = client.httpGetWithFallback("/api/v2/manifest");
 
@@ -77,7 +82,7 @@ class UpdateService {
         }
 
         // 2. check and download each file
-        listener.onOverallProgress(0);
+        emit(listener, new UpdateEvent.OverallProgressChanged(0));
         int total = manifestFiles.size();
         int checked = 0;
         int updated = 0;
@@ -91,8 +96,8 @@ class UpdateService {
             if (localFile == null) {
                 log(listener, "  [REJECT] " + relPath + " (unsafe manifest path)");
                 failed++;
-                listener.onStatus("Rejected unsafe path: " + checked + "/" + total, false);
-                listener.onOverallProgress(total > 0 ? checked * 95 / total : 100);
+                emit(listener, new UpdateEvent.StatusChanged("Rejected unsafe path: " + checked + "/" + total, false));
+                emit(listener, new UpdateEvent.OverallProgressChanged(total > 0 ? checked * 95 / total : 100));
                 continue;
             }
             boolean needDownload = false;
@@ -114,24 +119,24 @@ class UpdateService {
             }
 
             if (needDownload) {
-                listener.onStatus("Downloading: " + relPath, false);
+                emit(listener, new UpdateEvent.StatusChanged("Downloading: " + relPath, false));
                 log(listener, "         -> Downloading " + relPath + "...");
                 File parent = localFile.getParentFile();
                 if (parent != null && !parent.isDirectory()) parent.mkdirs();
                 File tmpFile = new File(localFile.getPath() + ".tmp");
 
-                // Track per-file download progress
-                downloadProgress.totalBytes = entry.size;
-                downloadProgress.downloadedBytes = 0;
-                downloadProgress.active = true;
-                listener.onDownloadStarted();
+                // Report the start of a per-file download; the speed is computed
+                // while streaming and delivered through progress events.
+                emit(listener, new UpdateEvent.DownloadProgressChanged(
+                        DownloadProgress.active(0, entry.size, 0)));
                 long dlStart = System.currentTimeMillis();
 
                 // URL-encode each path segment for the download URL
                 String encodedPath = ServerClient.encodePath(relPath);
-                boolean ok = client.httpDownloadWithFallback("/api/files/" + encodedPath,
-                        tmpFile, downloadProgress);
-                downloadProgress.active = false;
+                boolean ok = client.httpDownloadWithFallback("/api/files/" + encodedPath, tmpFile);
+
+                // Reset per-file progress bar immediately
+                emit(listener, new UpdateEvent.DownloadProgressChanged(DownloadProgress.inactive()));
 
                 if (ok) {
                     String dlHash = fileManager.sha256(tmpFile);
@@ -157,13 +162,10 @@ class UpdateService {
                     tmpFile.delete();
                     failed++;
                 }
-
-                // Reset per-file progress bar immediately
-                listener.onDownloadComplete();
             }
 
-            listener.onStatus("Checked: " + checked + "/" + total, false);
-            listener.onOverallProgress(total > 0 ? checked * 95 / total : 100);
+            emit(listener, new UpdateEvent.StatusChanged("Checked: " + checked + "/" + total, false));
+            emit(listener, new UpdateEvent.OverallProgressChanged(total > 0 ? checked * 95 / total : 100));
         }
 
         // 3. clean stale files
@@ -213,19 +215,15 @@ class UpdateService {
         log(listener, "  [UPDATE] New agent version available!");
         log(listener, "  Remote: " + agentHash);
         log(listener, "  Local:  " + myHash);
-        listener.onStatus("Downloading agent update...", false);
+        emit(listener, new UpdateEvent.StatusChanged("Downloading agent update...", false));
 
         File newJar = new File(myJarPath + ".new");
         if (newJar.exists()) newJar.delete();
 
-        downloadProgress.totalBytes = agentSize;
-        downloadProgress.downloadedBytes = 0;
-        downloadProgress.active = true;
-        listener.onDownloadStarted();
-
-        boolean ok = client.httpDownloadWithFallback("/api/agent", newJar, downloadProgress);
-        downloadProgress.active = false;
-        listener.onDownloadComplete();
+        emit(listener, new UpdateEvent.DownloadProgressChanged(
+                DownloadProgress.active(0, agentSize, 0)));
+        boolean ok = client.httpDownloadWithFallback("/api/agent", newJar);
+        emit(listener, new UpdateEvent.DownloadProgressChanged(DownloadProgress.inactive()));
 
         if (!ok) {
             log(listener, "  [FAIL]  Agent download failed");
@@ -253,7 +251,11 @@ class UpdateService {
         }
     }
 
+    private static void emit(UpdateListener listener, UpdateEvent event) {
+        listener.onUpdateEvent(event);
+    }
+
     private static void log(UpdateListener listener, String msg) {
-        listener.onLog(msg);
+        emit(listener, new UpdateEvent.LogMessage(msg));
     }
 }
