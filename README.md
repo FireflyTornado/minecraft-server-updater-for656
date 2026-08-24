@@ -187,6 +187,7 @@ Paths ending with `/` match directories recursively; bare names match exact file
     │   ├── JavaFxEntryPoint.java    # JavaFX composition root (reached reflectively from UpdateAgent)
     │   ├── JavaFxUiDispatcher.java  # UiDispatcher backed by Platform.runLater
     │   ├── JavaFxUpdateView.java    # JavaFX view implementing UpdateView (six phases)
+    │   └── ui.css                   # css ui   
     ├── build.sh / build.bat    # Compile + package both JARs (--javafx adds the JavaFX view)
     └── setup-agent.sh / setup-agent.bat  # Write config + append -javaagent to JVM args
 ```

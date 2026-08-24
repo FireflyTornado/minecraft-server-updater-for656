@@ -49,8 +49,11 @@ import java.util.List;
  * window close request is intercepted and the user must confirm quitting; in
  * the terminal SUCCESS/ERROR phases the close request is honoured directly.
  *
- * This is a functionally-correct skeleton: default JavaFX look, no CSS,
- * animations or icons.
+ * The view is styled entirely from {@code /ui.css}; it
+ * adds no icons, animations or gradients of its own. Terminal state classes
+ * ({@code success-state} / {@code error-state}) are maintained on the root by
+ * {@link #setPhase}, and the Quit-update confirmation shares the same
+ * stylesheet.
  */
 class JavaFxUpdateView implements UpdateView {
 
@@ -81,12 +84,20 @@ class JavaFxUpdateView implements UpdateView {
     // Debug close button
     private final Button btnClose = new Button("Close");
 
+    // Root layout — carries the .success-state / .error-state state classes.
+    private final VBox root = new VBox(8);
+
+    /** External form of /ui.css, or null if the stylesheet is missing. */
+    private final String stylesheet;
+
     private UpdatePhase phase = UpdatePhase.PREPARING;
 
     JavaFxUpdateView(UpdateViewListener listener, UiModel model) {
         this.listener = listener;
         this.debug = model.debug;
         this.stage = new Stage();
+        java.net.URL css = getClass().getResource("/ui.css");
+        this.stylesheet = css == null ? null : css.toExternalForm();
         initUI(model);
     }
 
@@ -225,31 +236,47 @@ class JavaFxUpdateView implements UpdateView {
 
     // ── Phase rendering ───────────────────────────────────────────
 
-    /** Track the current phase and apply the phase-specific rendering. */
+    /**
+     * Track the current phase and apply the phase-specific rendering. The root
+     * carries the terminal state classes ({@code success-state} /
+     * {@code error-state}); ui.css derives the title colour and related state
+     * visuals from them via {@code .root.success-state ...} /
+     * {@code .root.error-state ...}. The mid-flow phases carry neither class.
+     */
     private void setPhase(UpdatePhase p) {
         if (phase == p) {
             return;
         }
         phase = p;
+        root.getStyleClass().removeAll("success-state", "error-state");
         switch (p) {
             case PREPARING:
             case CHECKING:
             case CLEANING:
-            case SUCCESS:
                 hideDownloadArea();
+                logArea.setPrefRowCount(6);
                 break;
             case DOWNLOADING:
                 // Current-file area is shown by showDownloadProgress.
+                logArea.setPrefRowCount(6);
+                break;
+            case SUCCESS:
+                hideDownloadArea();
+                logArea.setPrefRowCount(6);
+                root.getStyleClass().add("success-state");
                 break;
             case ERROR:
                 hideDownloadArea();
                 // Error hides the overall progress bar, resets any residue
-                // (e.g. a previous 100%) and points at Details.
+                // (e.g. a previous 100%), expands Details and shows a few more
+                // log rows for the failure context.
                 overallBar.setProgress(0);
                 lblOverallPct.setText("");
                 overallArea.setVisible(false);
                 overallArea.setManaged(false);
                 detailsPane.setExpanded(true);
+                logArea.setPrefRowCount(10);
+                root.getStyleClass().add("error-state");
                 break;
         }
     }
@@ -301,8 +328,9 @@ class JavaFxUpdateView implements UpdateView {
      * Ask whether to abandon the running update. The default action stays with
      * the update; only an explicit "Skip and launch anyway" invokes the
      * existing {@link UpdateViewListener} close flow. Closing the dialog also
-     * counts as staying. (Danger styling of the skip button is deferred to the
-     * CSS step.)
+     * counts as staying. The dialog shares the main window's stylesheet, and
+     * the skip button gets the {@code danger-button} class so it renders as
+     * the destructive action.
      */
     private void confirmQuit() {
         Alert alert = new Alert(Alert.AlertType.CONFIRMATION);
@@ -313,6 +341,14 @@ class JavaFxUpdateView implements UpdateView {
         ButtonType skip = new ButtonType("Skip and launch anyway", ButtonBar.ButtonData.OTHER);
         alert.getButtonTypes().setAll(stay, skip);
         alert.initOwner(stage);
+        // Apply the same visual system as the main window.
+        if (stylesheet != null) {
+            alert.getDialogPane().getStylesheets().add(stylesheet);
+        }
+        alert.getDialogPane().getStyleClass().add("root");
+        // "Skip and launch anyway" is the destructive action — style it red.
+        Button skipButton = (Button) alert.getDialogPane().lookupButton(skip);
+        skipButton.getStyleClass().add("danger-button");
         // Enter / the default stays with the update.
         ((Button) alert.getDialogPane().lookupButton(stay)).setDefaultButton(true);
         alert.showAndWait().ifPresent(choice -> {
@@ -331,7 +367,15 @@ class JavaFxUpdateView implements UpdateView {
         // the in-progress confirmation.
         stage.setOnCloseRequest(e -> onCloseRequestedByUser(e));
 
+        // Style classes (mapped in ui.css). The root also carries the terminal
+        // state classes maintained by setPhase.
+        root.getStyleClass().add("root");
+
         // Overall progress area: bar + percent label.
+        lblStatus.getStyleClass().add("status-title");
+        lblDescription.getStyleClass().add("status-description");
+        overallArea.getStyleClass().add("overall-progress");
+        lblOverallPct.getStyleClass().add("pct");
         lblOverallPct.setPrefWidth(44);
         HBox.setHgrow(overallBar, Priority.ALWAYS);
         overallArea.getChildren().addAll(overallBar, lblOverallPct);
@@ -340,13 +384,20 @@ class JavaFxUpdateView implements UpdateView {
 
         // Current-file area: kind, path, bar, speed. Hidden until a download
         // becomes active.
+        dlArea.getStyleClass().add("file-area");
+        lblDlKind.getStyleClass().add("file-kind");
+        lblDlFile.getStyleClass().add("file-path");
+        dlBar.getStyleClass().add("file-progress");
+        lblDlSpeed.getStyleClass().add("download-speed");
         dlArea.getChildren().addAll(lblDlKind, lblDlFile, dlBar, lblDlSpeed);
         dlArea.setVisible(false);
         dlArea.setManaged(false);
 
         // Details area: Server URL, Game Directory and the full log. Collapsed
         // in normal mode, expanded in debug mode (and on error).
+        detailsPane.getStyleClass().add("details-pane");
         lblGameDir.setText("Game dir: " + model.gameDir);
+        logArea.getStyleClass().add("log");
         logArea.setEditable(false);
         logArea.setWrapText(false);
         logArea.setPrefRowCount(6);
@@ -355,12 +406,14 @@ class JavaFxUpdateView implements UpdateView {
         detailsPane.setExpanded(debug);
 
         // Root layout.
-        VBox root = new VBox(8, lblStatus, lblDescription, overallArea, dlArea, detailsPane);
-        root.setPadding(new Insets(10));
+        lblDescription.setWrapText(true);
+        root.setPadding(new Insets(12));
+        root.getChildren().addAll(lblStatus, lblDescription, overallArea, dlArea, detailsPane);
 
         // Debug close button — only present in debug mode, enabled by the
         // controller once the flow allows the user to close.
         if (debug) {
+            btnClose.getStyleClass().add("debug-close-button");
             btnClose.setDisable(true);
             btnClose.setOnAction(e -> listener.onCloseRequested());
             HBox bottom = new HBox(btnClose);
@@ -368,6 +421,11 @@ class JavaFxUpdateView implements UpdateView {
             root.getChildren().add(bottom);
         }
 
-        stage.setScene(new Scene(root, 520, 420));
+        // Apply the shared visual system (ui.css) — normal and debug alike.
+        Scene scene = new Scene(root, 520, 420);
+        if (stylesheet != null) {
+            scene.getStylesheets().add(stylesheet);
+        }
+        stage.setScene(scene);
     }
 }

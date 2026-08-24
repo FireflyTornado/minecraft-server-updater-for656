@@ -184,6 +184,7 @@ server=http://cdn1.example.com:25565,http://cdn2.example.com:8443
     │   ├── JavaFxEntryPoint.java    # JavaFX 组合根（由 UpdateAgent 反射调用）
     │   ├── JavaFxUiDispatcher.java  # 基于 Platform.runLater 的 UiDispatcher
     │   ├── JavaFxUpdateView.java    # 实现 UpdateView 的 JavaFX 视图（六种状态）
+    │   └── ui.css                   # 使用css控制ui控件   
     ├── build.sh / build.bat    # 编译并打包两个 JAR（--javafx 追加 JavaFX 视图）
     └── setup-agent.sh / setup-agent.bat  # 写入配置并追加 -javaagent 到 JVM 参数
 ```

@@ -38,6 +38,12 @@ echo [build] Compiling...
 if not exist "%BUILD_DIR%" mkdir "%BUILD_DIR%"
 if defined JAVAFX (
     javac -encoding UTF-8 -cp "lib\javafx\*" -d "%BUILD_DIR%" "%SRC_DIR%\*.java" "%JAVAFX_SRC_DIR%\*.java"
+    if %ERRORLEVEL% neq 0 (
+        echo [build] Compilation failed!
+        exit /b 1
+    )
+    REM Bundle the JavaFX stylesheet so the JavaFX view can load /ui.css.
+    copy /y "%JAVAFX_SRC_DIR%\ui.css" "%BUILD_DIR%\ui.css" >nul
 ) else (
     javac -encoding UTF-8 -d "%BUILD_DIR%" "%SRC_DIR%\*.java"
 )
@@ -57,7 +63,11 @@ if %ERRORLEVEL% neq 0 (
 echo [build] Packaging core JAR...
 REM Temporarily exclude Launcher classes from core JAR
 if exist Launcher.class ren Launcher.class Launcher.class.exclude
-jar cf "%CORE_JAR%" *.class
+if exist ui.css (
+    jar cf "%CORE_JAR%" *.class ui.css
+) else (
+    jar cf "%CORE_JAR%" *.class
+)
 if %ERRORLEVEL% neq 0 (
     echo [build] Core JAR packaging failed!
     exit /b 1
