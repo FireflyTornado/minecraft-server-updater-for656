@@ -134,13 +134,13 @@ Paths ending with `/` match directories recursively; bare names match exact file
     ├── src/
     │   ├── Launcher.java           # -javaagent entry; swaps core JAR from .new, then loads it
     │   ├── UpdateAgent.java        # Core entry (premain): config resolution + update flow
-    │   ├── UpdateApplication.java  # Flow control: wires service + view + controller; implements UpdateViewListener; owns when the view opens/closes
-    │   ├── UpdateController.java   # Runs update on a worker thread; translates UpdateEvents into UpdateView calls
+    │   ├── UpdateApplication.java  # Composition root: wires service + view + controller; holds no flow decisions
+    │   ├── UpdateController.java   # Controller/flow layer: coordinates service + view + app flow; decides start/success/failure/close/delay/latch release
     │   ├── UpdateService.java      # Update logic: manifest, hashing, download, cleanup, self-update; emits UpdateEvents
     │   ├── UpdateEvent.java        # Unified business event model (no Swing dependency)
     │   ├── UpdateListener.java     # Business→UI event callback interface (no Swing dependency)
     │   ├── UpdateView.java         # Toolkit-agnostic UI contract (open/close/status/...; no Swing/JavaFX types)
-    │   ├── UpdateViewListener.java # View→application user-action callback (window close / debug close)
+    │   ├── UpdateViewListener.java # View→controller user-action callback (window close / debug close)
     │   ├── UpdateGUI.java          # Swing UI (status, progress, log, speed); implements UpdateView; opened/closed by the application flow
     │   ├── UiModel.java            # Immutable display data handed to the UI
     │   ├── UiDispatcher.java       # "Run on UI thread" abstraction over the UI toolkit

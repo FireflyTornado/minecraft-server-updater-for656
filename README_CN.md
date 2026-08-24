@@ -134,13 +134,13 @@ server=http://cdn1.example.com:25565,http://cdn2.example.com:8443
     ├── src/
     │   ├── Launcher.java           # -javaagent 入口；用 .new 替换核心 JAR 并动态加载
     │   ├── UpdateAgent.java        # 核心入口（premain）：配置解析 + 更新流程
-    │   ├── UpdateApplication.java  # 流程控制：串联服务、视图与控制器；实现 UpdateViewListener；决定视图的打开/关闭时机
-    │   ├── UpdateController.java   # 在后台线程运行更新；将 UpdateEvent 转换为 UpdateView 调用
+    │   ├── UpdateApplication.java  # 组合根：串联服务、视图与控制器；不持有任何流程决策
+    │   ├── UpdateController.java   # 控制器/流程层：协调服务、视图与应用流程；决定启动/成功/失败/关闭/延迟/释放 latch
     │   ├── UpdateService.java      # 更新逻辑：清单、哈希校验、下载、清理、自更新；发出 UpdateEvent
     │   ├── UpdateEvent.java        # 统一的业务事件模型（不依赖 Swing）
     │   ├── UpdateListener.java     # 业务层 → 界面事件回调接口（不依赖 Swing）
     │   ├── UpdateView.java         # 与 UI 工具包无关的视图契约（open/close/状态等；不含 Swing/JavaFX 类型）
-    │   ├── UpdateViewListener.java # 视图 → 应用的用户操作回调（关闭窗口 / 调试关闭按钮）
+    │   ├── UpdateViewListener.java # 视图 → 控制器的用户操作回调（关闭窗口 / 调试关闭按钮）
     │   ├── UpdateGUI.java          # Swing 界面（状态、进度、日志、速度）；实现 UpdateView；由应用流程打开/关闭
     │   ├── UiModel.java            # 传给界面的不可变展示数据
     │   ├── UiDispatcher.java       # 对 UI 工具包「在 UI 线程执行」的抽象
