@@ -34,8 +34,9 @@
  *
  * Deliberately absent: CSS-drawn icons, animations, gradients, background
  * images and Minecraft textures. The status-illustration slot in the view is a
- * reserved ImageView that loads transparent PNGs from the JAR (per phase);
- * bundled art is optional and any missing image degrades to a hidden slot.
+ * reserved StackPane (two stacked ImageViews) that cross-fades preloaded
+ * transparent PNGs from the JAR per phase; the micro-animations live in Java,
+ * never here. Any missing image degrades to a hidden slot.
  * ===================================================================== */
 
 .root {
@@ -68,9 +69,10 @@
     -fx-alignment: center-left;
 }
 
-/* The status-illustration slot (ImageView.statusImage) is fitted to 64x64 in
-   JavaFxUpdateView and hidden (managed=false) until a bundled PNG loads, so an
-   empty slot contributes no height and never breaks the layout. */
+/* The status-illustration slot (StackPane.status-image holding two ImageViews)
+   is fitted to 64x64 in JavaFxUpdateView and hidden (managed=false) while no
+   art is shown, so an empty slot contributes no height and never breaks the
+   layout. Phase switches cross-fade between the two stacked ImageViews. */
 
 /* ── Overall progress area ──────────────────────────────────────── */
 

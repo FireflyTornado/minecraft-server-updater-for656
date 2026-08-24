@@ -1,3 +1,7 @@
+import javafx.animation.Animation;
+import javafx.animation.FadeTransition;
+import javafx.animation.ParallelTransition;
+import javafx.animation.ScaleTransition;
 import javafx.application.Platform;
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
@@ -15,10 +19,14 @@ import javafx.scene.image.Image;
 import javafx.scene.image.ImageView;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
+import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
 import javafx.stage.Stage;
+import javafx.util.Duration;
 
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -55,12 +63,19 @@ import java.util.regex.Pattern;
  * window close request is intercepted and the user must confirm quitting; in
  * the terminal SUCCESS/ERROR phases the close request is honoured directly.
  *
- * The view is styled entirely from {@code /ui.css}; it adds no animations or
- * gradients of its own. A status-illustration slot ({@code statusImage}) is
- * reserved in the header: it loads a transparent PNG from the JAR by
- * {@link UpdatePhase} (and a separate updater PNG under PREPARING), and any
- * missing or corrupt resource degrades to a hidden slot without affecting the
- * layout or the update flow. Terminal state classes
+ * The view is styled entirely from {@code /ui.css}; it adds no gradients or
+ * looping animations of its own. A fixed 64×64 status-illustration slot
+ * ({@code statusStack}) is reserved in the header: all seven transparent PNGs
+ * (one per {@link UpdatePhase}, plus the updater art under PREPARING) are
+ * preloaded once at startup and cached, so a phase switch never re-decodes from
+ * the JAR. Switching art is a real cross-fade between two stacked ImageViews
+ * (~200ms), with a light 0.94→1.0 scale-in for the terminal SUCCESS/ERROR art;
+ * the status title/description do a very light opacity transition only when the
+ * phase actually changes. Per-file counting, download-speed and percentage
+ * updates never trigger an animation. A missing or corrupt resource still
+ * degrades to a hidden slot without affecting the layout or the update flow,
+ * and a new phase always interrupts a running fade safely — an older phase's
+ * art can never cover the latest state. Terminal state classes
  * ({@code success-state} / {@code error-state}) are maintained on the root by
  * {@link #setPhase}, and the Quit-update confirmation shares the same
  * stylesheet.
@@ -78,13 +93,21 @@ class JavaFxUpdateView implements UpdateView {
     private static final double WINDOW_WIDTH = 520;
     private static final double WINDOW_HEIGHT_COLLAPSED = 300;
 
-    // Reserved status-illustration slot: a transparent PNG fitted to this size.
+    // Reserved status-illustration slot: the display size the ImageViews fit
+    // the (possibly 128×128+) transparent PNG sources down to.
     private static final double STATUS_IMAGE_SIZE = 64;
 
-    // Status-illustration resources (JAR-relative). These are placeholder paths
-    // — the art is not bundled yet, so every load falls back to hiding the
-    // ImageView. When real PNGs are added at these paths they appear on their
-    // own, with no further code changes.
+    // Round-3 micro-animation timings (视觉精修第三步要求.md §2). The ~200ms
+    // image cross-fade is the only "real" animation; the SUCCESS/ERROR scale-in
+    // and the header opacity transition are deliberately short and light. No
+    // shake / bounce / float / glow / background or looping animations.
+    private static final double CROSS_FADE_MS = 200;        // spec 180–220ms
+    private static final double ENTRANCE_SCALE_MS = 160;    // spec 150–180ms
+    private static final double HEADER_FADE_MS = 130;       // spec 100–150ms
+    private static final double ENTRANCE_SCALE_FROM = 0.94; // spec 0.94 → 1.0
+
+    // Status-illustration resources (JAR-relative), bundled into the core JAR
+    // from agent/images/ and preloaded into the statusImages cache at startup.
     private static final String IMG_PREPARING = "/images/preparing.png";
     private static final String IMG_UPDATER = "/images/updater.png";
     private static final String IMG_CHECKING = "/images/checking.png";
@@ -119,10 +142,26 @@ class JavaFxUpdateView implements UpdateView {
     // Debug close button
     private final Button btnClose = new Button("Close");
 
-    // Reserved status-illustration slot in the header. Hidden until a bundled
-    // PNG loads; a missing or corrupt resource degrades to hidden without
-    // affecting the layout (see showStatusImage / hideStatusImage).
-    private final ImageView statusImage = new ImageView();
+    // Reserved status-illustration slot: a fixed 64×64 StackPane holding two
+    // stacked ImageViews so a phase switch is a real cross-fade (the new art
+    // fades in on top while the old fades out beneath) — never a
+    // setImage-then-fade. statusFront is the settled art on display; statusBack
+    // is the incoming view during a fade; the two are swapped when a fade
+    // completes. The whole stack hides (managed=false) when no art is
+    // available, degrading exactly as before.
+    private final StackPane statusStack = new StackPane();
+    private ImageView statusFront = new ImageView();
+    private ImageView statusBack = new ImageView();
+
+    // Phase art decoded once at startup (see preloadStatusImages) and reused for
+    // every phase switch — never re-decoded from the JAR per event. Keyed by the
+    // /images/*.png resource path.
+    private final Map<String, Image> statusImages = new HashMap<>();
+
+    // In-flight micro-animations, kept so a new phase switch can stop them
+    // safely and jump straight to the latest state (no stale overlay).
+    private Animation statusFade;
+    private Animation headerFade;
 
     // Root layout — carries the .success-state / .error-state state classes.
     private final VBox root = new VBox(8);
@@ -352,6 +391,11 @@ class JavaFxUpdateView implements UpdateView {
     /** Close the window. Must be called on the JavaFX Application Thread. */
     @Override
     public void close() {
+        stopStatusFade();
+        if (headerFade != null) {
+            headerFade.stop();
+            headerFade = null;
+        }
         stage.close();
     }
 
@@ -367,6 +411,11 @@ class JavaFxUpdateView implements UpdateView {
     private void setPhase(UpdatePhase p) {
         if (phase != p) {
             phase = p;
+            // A real phase change is the only thing allowed to fade the header
+            // text — per-file counting, download-speed and percentage updates
+            // keep the phase unchanged and short-circuit before reaching here,
+            // so they never animate.
+            animateHeaderFade();
             root.getStyleClass().removeAll("success-state", "error-state");
             switch (p) {
             case PREPARING:
@@ -468,50 +517,218 @@ class JavaFxUpdateView implements UpdateView {
 
     /** Point the status illustration at the given phase's art. */
     private void updateStatusImage(UpdatePhase phase) {
-        showStatusImage(statusImageResource(phase));
+        // The terminal SUCCESS/ERROR art gets a light 0.94→1.0 entrance in
+        // addition to the cross-fade; mid-flow phases just cross-fade.
+        boolean entrance = phase == UpdatePhase.SUCCESS || phase == UpdatePhase.ERROR;
+        showStatusImage(statusImageResource(phase), entrance);
+    }
+
+    /** Show the status illustration for a JAR resource, without an entrance. */
+    private void showStatusImage(String resource) {
+        showStatusImage(resource, false);
     }
 
     /**
-     * Try to load a status illustration from a JAR resource. Status art is
-     * optional: a missing resource, an unresolvable path or a corrupt file just
-     * hides the ImageView — the layout and the update flow are never affected.
-     * The current placeholder paths resolve to nothing until the real PNGs are
-     * bundled.
+     * Show the status illustration for a JAR resource. The image comes from the
+     * preloaded cache (never decoded on a phase switch). Status art is optional:
+     * a missing resource, an unresolvable path or a corrupt file just hides the
+     * slot — the layout and the update flow are never affected. An image that
+     * differs from what is on display is cross-faded in over the current art;
+     * a re-asserted identical image (per-file counting, download-speed ticks)
+     * never triggers an animation.
      */
-    private void showStatusImage(String resource) {
-        if (resource == null) {
+    private void showStatusImage(String resource, boolean entrance) {
+        Image image = resource == null ? null : statusImages.get(resource);
+        if (image == null) {
             hideStatusImage();
             return;
         }
-        java.net.URL url = getClass().getResource(resource);
-        if (url == null) {
-            hideStatusImage();
+        crossFadeTo(image, entrance);
+    }
+
+    /**
+     * Cross-fade to a new status illustration over ~200ms using the two stacked
+     * ImageViews (statusBack fades in on top while statusFront fades out beneath),
+     * with an optional 0.94→1.0 scale-in for SUCCESS/ERROR. If a new phase
+     * interrupts a running fade, the running animation is stopped first and the
+     * latest art is put straight onto the top view — an older phase's art can
+     * never cover the new state.
+     */
+    private void crossFadeTo(Image image, boolean entrance) {
+        // No actual change: the requested art is already the settled display
+        // (statusFade == null → statusFront) or already the in-flight target
+        // (statusFade running → statusBack). Counting / speed / percentage
+        // ticks land here and animate nothing.
+        if (statusStack.isVisible()
+                && (statusFade == null
+                        ? statusFront.getImage() == image
+                        : statusBack.getImage() == image)) {
             return;
         }
-        // preserveRatio with a requested fit so art never stretches; decode is
-        // asynchronous, so a corrupt file also lands in the error listener.
-        Image image = new Image(url.toExternalForm(), STATUS_IMAGE_SIZE, STATUS_IMAGE_SIZE, true, true);
-        if (image.isError()) {
-            hideStatusImage();
-            return;
+        stopStatusFade();
+        // Incoming art goes on the top view, above the one currently shown.
+        statusBack.setImage(image);
+        statusBack.toFront();
+        statusBack.setOpacity(0.0);
+        statusBack.setScaleX(entrance ? ENTRANCE_SCALE_FROM : 1.0);
+        statusBack.setScaleY(entrance ? ENTRANCE_SCALE_FROM : 1.0);
+        statusBack.setVisible(true);
+        statusBack.setManaged(true);
+        statusStack.setVisible(true);
+        statusStack.setManaged(true);
+
+        FadeTransition fadeIn = new FadeTransition(Duration.millis(CROSS_FADE_MS), statusBack);
+        fadeIn.setFromValue(0.0);
+        fadeIn.setToValue(1.0);
+        FadeTransition fadeOut = new FadeTransition(Duration.millis(CROSS_FADE_MS), statusFront);
+        fadeOut.setFromValue(1.0);
+        fadeOut.setToValue(0.0);
+        ParallelTransition fade = new ParallelTransition(fadeIn, fadeOut);
+        if (entrance) {
+            ScaleTransition scale = new ScaleTransition(Duration.millis(ENTRANCE_SCALE_MS), statusBack);
+            scale.setFromX(ENTRANCE_SCALE_FROM);
+            scale.setToX(1.0);
+            scale.setFromY(ENTRANCE_SCALE_FROM);
+            scale.setToY(1.0);
+            fade.getChildren().add(scale);
         }
-        image.errorProperty().addListener((obs, wasError, isError) -> {
-            // Only hide if this image is still the one on show — a later phase
-            // may have already replaced it.
-            if (isError && statusImage.getImage() == image) {
-                hideStatusImage();
-            }
+        fade.setOnFinished(e -> {
+            // Old layer fully faded out: release its art and make the incoming
+            // view the settled front.
+            statusFront.setImage(null);
+            statusFront.setVisible(false);
+            statusFront.setManaged(false);
+            statusFront.setOpacity(1.0);
+            statusFront.setScaleX(1.0);
+            statusFront.setScaleY(1.0);
+            ImageView swap = statusFront;
+            statusFront = statusBack;
+            statusBack = swap;
+            statusFade = null;
         });
-        statusImage.setImage(image);
-        statusImage.setVisible(true);
-        statusImage.setManaged(true);
+        statusFade = fade;
+        fade.play();
+    }
+
+    /** Stop any in-flight image cross-fade (the next show re-starts cleanly). */
+    private void stopStatusFade() {
+        if (statusFade != null) {
+            statusFade.stop();
+            statusFade = null;
+        }
     }
 
     /** Hide the status illustration (the default state). */
     private void hideStatusImage() {
-        statusImage.setImage(null);
-        statusImage.setVisible(false);
-        statusImage.setManaged(false);
+        stopStatusFade();
+        statusFront.setImage(null);
+        statusBack.setImage(null);
+        statusFront.setVisible(false);
+        statusFront.setManaged(false);
+        statusBack.setVisible(false);
+        statusBack.setManaged(false);
+        statusStack.setVisible(false);
+        statusStack.setManaged(false);
+    }
+
+    // ── Status illustration preload ────────────────────────────────
+
+    /** All status-art resources, decoded once at view startup. */
+    private static final String[] STATUS_ART = {
+        IMG_PREPARING, IMG_UPDATER, IMG_CHECKING, IMG_DOWNLOADING,
+        IMG_CLEANING, IMG_SUCCESS, IMG_ERROR,
+    };
+
+    /**
+     * Decode every status illustration once at startup and cache it, so a phase
+     * switch only repaints the ImageView — it never re-decodes from the JAR.
+     * Images load in the background (they arrive on the FX thread when ready);
+     * a missing or corrupt resource is simply not cached and degrades to the
+     * hidden slot, exactly as before.
+     */
+    private void preloadStatusImages() {
+        for (String resource : STATUS_ART) {
+            Image image = loadStatusImage(resource);
+            if (image != null) {
+                statusImages.put(resource, image);
+            }
+        }
+    }
+
+    /**
+     * Load one status image at its native resolution — the ImageView scales it
+     * to the 64×64 slot with preserveRatio + smooth, so 128×128+ transparent PNG
+     * sources are supported directly. Returns null (→ safe degradation) if the
+     * resource is missing or the decode fails.
+     */
+    private Image loadStatusImage(String resource) {
+        java.net.URL url = getClass().getResource(resource);
+        if (url == null) {
+            return null;
+        }
+        Image image = new Image(url.toExternalForm());
+        if (image.isError()) {
+            return null;
+        }
+        image.errorProperty().addListener((obs, wasError, isError) -> {
+            if (isError) {
+                // Drop the broken image so future shows degrade, and if it is
+                // currently on display, hide the slot.
+                statusImages.remove(resource);
+                if (statusFront.getImage() == image || statusBack.getImage() == image) {
+                    hideStatusImage();
+                }
+            }
+        });
+        return image;
+    }
+
+    /** Dev/diagnostic (used by devtools/PhaseSwitchTest): the art resource
+     *  currently on display after any fade settles, or null when the slot is
+     *  hidden. Not part of the {@link UpdateView} contract. */
+    String displayedStatusImageResource() {
+        Image shown = statusFront.getImage();
+        if (shown == null) {
+            return null;
+        }
+        for (Map.Entry<String, Image> e : statusImages.entrySet()) {
+            if (e.getValue() == shown) {
+                return e.getKey();
+            }
+        }
+        return null;
+    }
+
+    // ── Header micro-transition ────────────────────────────────────
+
+    /**
+     * Very light opacity transition on the status title/description when the
+     * phase actually changes (~130ms). The caller sets the new phase's text
+     * right after setPhase returns, in the same FX-thread call, so what the
+     * user sees is the new text fading in. Counting, speed and percentage
+     * updates never change the phase, so they never reach this method.
+     */
+    private void animateHeaderFade() {
+        if (headerFade != null) {
+            headerFade.stop();
+            headerFade = null;
+        }
+        lblStatus.setOpacity(0.0);
+        lblDescription.setOpacity(0.0);
+        FadeTransition title = new FadeTransition(Duration.millis(HEADER_FADE_MS), lblStatus);
+        title.setFromValue(0.0);
+        title.setToValue(1.0);
+        FadeTransition desc = new FadeTransition(Duration.millis(HEADER_FADE_MS), lblDescription);
+        desc.setFromValue(0.0);
+        desc.setToValue(1.0);
+        ParallelTransition fade = new ParallelTransition(title, desc);
+        fade.setOnFinished(e -> {
+            lblStatus.setOpacity(1.0);
+            lblDescription.setOpacity(1.0);
+            headerFade = null;
+        });
+        headerFade = fade;
+        fade.play();
     }
 
     private static int clamp(int value) {
@@ -630,18 +847,28 @@ class JavaFxUpdateView implements UpdateView {
         root.getStyleClass().add("root");
 
         // Status header: reserved status-illustration slot + title/subtitle.
-        // The image stays hidden until a bundled PNG actually loads (see
-        // showStatusImage), so today it reserves the layout slot invisibly.
+        // The slot starts hidden and appears with the first phase's art; a
+        // missing/corrupt resource keeps it hidden (safe degradation).
         lblStatus.getStyleClass().add("status-title");
         lblDescription.getStyleClass().add("status-description");
         lblDescription.setWrapText(true);
-        statusImage.getStyleClass().add("status-image");
-        statusImage.setPreserveRatio(true);
-        statusImage.setFitWidth(STATUS_IMAGE_SIZE);
-        statusImage.setFitHeight(STATUS_IMAGE_SIZE);
+        // The display slot stays a fixed 64×64 square; the ImageViews scale the
+        // (possibly 128×128+) transparent PNG sources down with preserveRatio +
+        // smooth fit. Decode happens once in preloadStatusImages, not per phase.
+        statusFront.getStyleClass().add("status-image");
+        statusFront.setPreserveRatio(true);
+        statusFront.setSmooth(true);
+        statusFront.setFitWidth(STATUS_IMAGE_SIZE);
+        statusFront.setFitHeight(STATUS_IMAGE_SIZE);
+        statusBack.setPreserveRatio(true);
+        statusBack.setSmooth(true);
+        statusBack.setFitWidth(STATUS_IMAGE_SIZE);
+        statusBack.setFitHeight(STATUS_IMAGE_SIZE);
+        statusStack.getChildren().addAll(statusFront, statusBack);
         hideStatusImage();
+        preloadStatusImages();
         VBox statusText = new VBox(4, lblStatus, lblDescription);
-        HBox statusHeader = new HBox(12, statusImage, statusText);
+        HBox statusHeader = new HBox(12, statusStack, statusText);
         statusHeader.getStyleClass().add("status-header");
         statusHeader.setAlignment(Pos.CENTER_LEFT);
         HBox.setHgrow(statusText, Priority.ALWAYS);
