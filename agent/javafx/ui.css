@@ -32,8 +32,10 @@
  *   Radius   --radius-sm 4 / --radius-md 6 / --radius-lg 10
  *   Bars     --height-overall-bar 8px / --height-file-bar 6px
  *
- * Deliberately absent: icons, animations, gradients, background images and
- * Minecraft textures.
+ * Deliberately absent: CSS-drawn icons, animations, gradients, background
+ * images and Minecraft textures. The status-illustration slot in the view is a
+ * reserved ImageView that loads transparent PNGs from the JAR (per phase);
+ * bundled art is optional and any missing image degrades to a hidden slot.
  * ===================================================================== */
 
 .root {
@@ -59,6 +61,16 @@
     -fx-font-size: 13px;
     -fx-text-fill: #A8B0BA;
 }
+
+/* ── Status header: reserved status illustration + title ─────────── */
+
+.status-header {
+    -fx-alignment: center-left;
+}
+
+/* The status-illustration slot (ImageView.statusImage) is fitted to 64x64 in
+   JavaFxUpdateView and hidden (managed=false) until a bundled PNG loads, so an
+   empty slot contributes no height and never breaks the layout. */
 
 /* ── Overall progress area ──────────────────────────────────────── */
 
@@ -159,9 +171,18 @@
     -fx-padding: 0 4px 0 0;
 }
 
+/* The expand arrow is a muted secondary affordance so it never competes with
+   the main status; it only takes the accent on hover / focus. The -fx-effect
+   reset also kills the default green focus glow. */
 .details-pane > .title > .arrow-button .arrow {
-    -fx-background-color: #A8B0BA;
+    -fx-background-color: #6B7681;
     -fx-background-insets: 0;
+    -fx-effect: null;
+}
+.details-pane > .title > .arrow-button:hover .arrow,
+.details-pane > .title > .arrow-button:focused .arrow {
+    -fx-background-color: #5DD35D;
+    -fx-effect: null;
 }
 
 .details-pane > .content {
@@ -281,6 +302,18 @@
 .debug-close-button:disabled {
     -fx-opacity: 0.4;
     -fx-text-fill: #6B7681;
+}
+
+/* Debug footer: a full-width hairline separates the content from the close
+   button row, anchoring the button as a footer rather than an isolated
+   control in the corner. */
+.debug-footer-separator {
+    -fx-padding: 0;
+}
+.debug-footer-separator .line {
+    -fx-background-color: #2A3238;
+    -fx-border-color: transparent;
+    -fx-padding: 0;
 }
 
 /* Destructive action inside the Quit-update Alert. */

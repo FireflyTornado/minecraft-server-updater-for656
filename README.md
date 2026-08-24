@@ -183,6 +183,23 @@ To use it:
    `-javaagent`). If the JavaFX implementation is absent or cannot start,
    `UpdateAgent` logs a warning and falls back to the Swing view.
 
+#### Status illustrations & layout
+
+The header reserves a 64×64 slot for a transparent PNG that switches with the
+update phase — one art per phase (`preparing`, `checking`, `downloading`,
+`cleaning`, `success`, `error`), plus a separate `updater` art for the
+self-update sub-state of Preparing. Images are JAR resources under
+`/images/*.png`, sourced from `agent/images/` and bundled into the core JAR by
+the `--javafx` build; until the real art is provided they act as placeholders.
+A missing or corrupt image simply hides the slot — it never affects the layout
+or the update flow.
+
+The window height is content-driven: expanding Details (error state or debug
+mode) grows the window to fit its content rather than jumping to a fixed height,
+so expanded states leave no dead space at the bottom. The Details expand arrow
+is de-emphasised (accent only on hover/focus), and in debug mode the Close
+button sits in its own footer row above a separator line.
+
 ### Screenshots
 
 Every visual state is captured in [`screenshots/`](screenshots/), rendered
@@ -202,12 +219,21 @@ off-screen by the dev harness `agent/devtools/UiScreenshotHarness.java`:
 | `10_debug_close_enabled.png` | Debug window, close enabled after completion |
 | `11_quit_alert.png` | "Quit update?" confirmation dialog |
 
-> **Regenerating screenshots** (from `agent/`):
+> **Regenerating the placeholder art and screenshots** (from `agent/`):
 > ```bash
-> javac -encoding UTF-8 -cp "lib/javafx/*" -d build-harness src/*.java javafx/*.java devtools/*.java
+> # 1. (re)generate the placeholder status illustrations into agent/images/
+> javac -encoding UTF-8 -d build-harness devtools/GenImages.java
+> java -cp build-harness GenImages
+>
+> # 2. render every UI state to screenshots/*.png
+> javac -encoding UTF-8 --module-path lib/javafx --add-modules javafx.controls,javafx.swing \
+>       -cp "lib/javafx/*" -d build-harness src/*.java javafx/*.java devtools/*.java
 > cp javafx/ui.css build-harness/
-> java -cp "build-harness;lib/javafx/*" UiScreenshotHarness
+> java --module-path lib/javafx --add-modules javafx.controls,javafx.swing \
+>       -cp "build-harness;.;lib/javafx/*" UiScreenshotHarness
 > ```
+> The `.` entry on the classpath lets the view resolve `/images/*.png` from
+> `agent/images/`; the shipped build gets them from the JAR instead.
 
 ## Project Structure
 
@@ -247,15 +273,19 @@ off-screen by the dev harness `agent/devtools/UiScreenshotHarness.java`:
     │   ├── DownloadProgress.java   # Per-file download progress snapshot (worker ↔ UI)
     │   ├── JsonParser.java         # Lightweight JSON parsing helpers (no external deps)
     │   └── FormatUtil.java         # Formatting helpers (e.g. download speed)
+    ├── images/                 # Status illustrations for the JavaFX view (one per phase); bundled into the core JAR
     ├── javafx/                 # JavaFX view — parallel impl of UpdateView (built only with --javafx)
     │   ├── JavaFxEntryPoint.java    # JavaFX composition root (reached reflectively from UpdateAgent)
     │   ├── JavaFxUiDispatcher.java  # UiDispatcher backed by Platform.runLater
-    │   ├── JavaFxUpdateView.java    # JavaFX view implementing UpdateView (six phases, /ui.css styling)
+    │   ├── JavaFxUpdateView.java    # JavaFX view implementing UpdateView (six phases, status-illustration slot, /ui.css styling)
     │   └── ui.css                   # Dark flat visual system shared by the window and dialogs
     ├── devtools/               # Dev-only tools — never shipped in the agent JARs
-    │   └── UiScreenshotHarness.java  # Off-screen harness; renders every UI state to screenshots/*.png
+    │   ├── UiScreenshotHarness.java  # Off-screen harness; renders every UI state to screenshots/*.png
+    │   ├── GenImages.java            # Generates the placeholder status illustrations into images/
+    │   ├── ImageCheck.java           # Verifies generated illustrations (bounds, glyph, transparency)
+    │   └── ScreenshotProbe.java      # Verifies each screenshot shows its phase illustration
     ├── lib/javafx/             # JavaFX 21 runtime jars (javafx-base/-graphics/-controls/-swing, win) — required by --javafx
-    ├── build.sh / build.bat    # Compile + package both JARs (--javafx adds the JavaFX view)
+    ├── build.sh / build.bat    # Compile + package both JARs (--javafx adds the JavaFX view and bundles ui.css + images/)
     └── setup-agent.sh / setup-agent.bat  # Write config + append -javaagent to JVM args
 ```
 

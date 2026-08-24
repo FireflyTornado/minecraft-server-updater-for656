@@ -170,6 +170,19 @@ server=http://cdn1.example.com:25565,http://cdn2.example.com:8443
    `-javaagent` 旁的启动 JVM 参数中加上 `agent/lib/javafx/*`）。如果 JavaFX
    实现缺失或无法启动，`UpdateAgent` 会记录警告并回退到 Swing 视图。
 
+#### 状态插图与布局
+
+标题栏左侧预留了一个 **64×64 的状态插图槽位** —— 透明 PNG，随更新阶段切换：
+每个阶段一张插图（`preparing` / `checking` / `downloading` / `cleaning` /
+`success` / `error`），PREPARING 的自更新子状态另有独立的 `updater` 插图。
+图片作为 JAR 资源 `/images/*.png` 加载，源文件在 `agent/images/` 下，由
+`--javafx` 构建打包进核心 JAR；正式插图到位前作为占位图。**图片缺失或损坏时
+槽位自动隐藏**，不影响布局与更新流程。
+
+窗口高度为**内容驱动**：Details 展开（出错或调试模式）时窗口按内容撑开，而
+不是跳到固定高度，展开状态不再留底部空白。Details 展开箭头做了弱化（仅悬停
+/聚焦时高亮），调试模式的 Close 按钮位于独立底栏行（上方带分隔细线）。
+
 ### 截图
 
 每一种界面状态都保存在 [`screenshots/`](screenshots/) 中 — 由开发工具
@@ -189,12 +202,21 @@ server=http://cdn1.example.com:25565,http://cdn2.example.com:8443
 | `10_debug_close_enabled.png` | 调试窗口，流程完成后关闭按钮可用 |
 | `11_quit_alert.png` | “Quit update?” 退出确认弹窗 |
 
-> **重新生成截图**（在 `agent/` 目录下）：
+> **重新生成占位插图与截图**（在 `agent/` 目录下）：
 > ```bash
-> javac -encoding UTF-8 -cp "lib/javafx/*" -d build-harness src/*.java javafx/*.java devtools/*.java
+> # 1. 重新生成占位状态插图（写入 agent/images/）
+> javac -encoding UTF-8 -d build-harness devtools/GenImages.java
+> java -cp build-harness GenImages
+>
+> # 2. 重新渲染每种界面状态到 screenshots/*.png
+> javac -encoding UTF-8 --module-path lib/javafx --add-modules javafx.controls,javafx.swing \
+>       -cp "lib/javafx/*" -d build-harness src/*.java javafx/*.java devtools/*.java
 > cp javafx/ui.css build-harness/
-> java -cp "build-harness;lib/javafx/*" UiScreenshotHarness
+> java --module-path lib/javafx --add-modules javafx.controls,javafx.swing \
+>       -cp "build-harness;.;lib/javafx/*" UiScreenshotHarness
 > ```
+> 类路径里的 `.`（即 `agent/` 目录）让视图能解析 `agent/images/` 下的
+> `/images/*.png`；正式构建改为从 JAR 内加载。
 
 ## 项目结构
 
@@ -234,15 +256,19 @@ server=http://cdn1.example.com:25565,http://cdn2.example.com:8443
     │   ├── DownloadProgress.java   # 单文件下载进度快照（工作线程 ↔ 界面）
     │   ├── JsonParser.java         # 轻量 JSON 解析辅助（无外部依赖）
     │   └── FormatUtil.java         # 格式化辅助（如下载速度）
+    ├── images/                 # JavaFX 视图的状态插图（每阶段一张）；打包进核心 JAR
     ├── javafx/                 # JavaFX 视图 — UpdateView 的并行实现（仅在 --javafx 构建时编译）
     │   ├── JavaFxEntryPoint.java    # JavaFX 组合根（由 UpdateAgent 反射调用）
     │   ├── JavaFxUiDispatcher.java  # 基于 Platform.runLater 的 UiDispatcher
-    │   ├── JavaFxUpdateView.java    # 实现 UpdateView 的 JavaFX 视图（六种状态，由 /ui.css 提供样式）
+    │   ├── JavaFxUpdateView.java    # 实现 UpdateView 的 JavaFX 视图（六种状态 + 状态插图槽位，由 /ui.css 提供样式）
     │   └── ui.css                   # 窗口与对话框共用的深色扁平视觉系统
     ├── devtools/               # 仅开发用工具 — 不打包进 Agent JAR
-    │   └── UiScreenshotHarness.java  # 离屏渲染每种界面状态到 screenshots/*.png
+    │   ├── UiScreenshotHarness.java  # 离屏渲染每种界面状态到 screenshots/*.png
+    │   ├── GenImages.java            # 生成占位状态插图到 images/
+    │   ├── ImageCheck.java           # 校验生成的插图（边界、图标、透明）
+    │   └── ScreenshotProbe.java      # 校验每张截图是否显示了对应阶段插图
     ├── lib/javafx/             # JavaFX 21 运行时 jar（javafx-base/-graphics/-controls/-swing，win）— --javafx 构建所需
-    ├── build.sh / build.bat    # 编译并打包两个 JAR（--javafx 追加 JavaFX 视图）
+    ├── build.sh / build.bat    # 编译并打包两个 JAR（--javafx 追加 JavaFX 视图并打包 ui.css + images/）
     └── setup-agent.sh / setup-agent.bat  # 写入配置并追加 -javaagent 到 JVM 参数
 ```
 

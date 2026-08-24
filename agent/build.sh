@@ -40,6 +40,8 @@ if [[ $JAVAFX == 1 ]]; then
     javac -encoding UTF-8 -cp "lib/javafx/*" -d "$BUILD_DIR" "$SRC_DIR"/*.java "$JAVAFX_SRC_DIR"/*.java
     # Bundle the JavaFX stylesheet so the JavaFX view can load /ui.css.
     cp "$JAVAFX_SRC_DIR/ui.css" "$BUILD_DIR/ui.css"
+    # Bundle the status illustrations so the JavaFX view can load /images/*.png.
+    cp -r "$SCRIPT_DIR/images" "$BUILD_DIR/images"
 else
     javac -encoding UTF-8 -d "$BUILD_DIR" "$SRC_DIR"/*.java
 fi
@@ -51,8 +53,8 @@ jar cfm "$LAUNCHER_JAR" "$SCRIPT_DIR/META-INF/MANIFEST.MF" Launcher.class
 echo "[build] Packaging core JAR..."
 # Temporarily exclude Launcher class from core JAR
 if [ -f Launcher.class ]; then mv Launcher.class Launcher.class.exclude; fi
-if [ -f ui.css ]; then
-    jar cf "$CORE_JAR" *.class ui.css
+if [ -d images ]; then
+    jar cf "$CORE_JAR" *.class ui.css images
 else
     jar cf "$CORE_JAR" *.class
 fi

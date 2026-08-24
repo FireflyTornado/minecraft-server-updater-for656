@@ -44,6 +44,8 @@ if defined JAVAFX (
     )
     REM Bundle the JavaFX stylesheet so the JavaFX view can load /ui.css.
     copy /y "%JAVAFX_SRC_DIR%\ui.css" "%BUILD_DIR%\ui.css" >nul
+    REM Bundle the status illustrations so the JavaFX view can load /images/*.png.
+    xcopy /e /i /y "%SCRIPT_DIR%images" "%BUILD_DIR%\images" >nul
 ) else (
     javac -encoding UTF-8 -d "%BUILD_DIR%" "%SRC_DIR%\*.java"
 )
@@ -63,8 +65,8 @@ if %ERRORLEVEL% neq 0 (
 echo [build] Packaging core JAR...
 REM Temporarily exclude Launcher classes from core JAR
 if exist Launcher.class ren Launcher.class Launcher.class.exclude
-if exist ui.css (
-    jar cf "%CORE_JAR%" *.class ui.css
+if exist images (
+    jar cf "%CORE_JAR%" *.class ui.css images
 ) else (
     jar cf "%CORE_JAR%" *.class
 )
