@@ -16,6 +16,7 @@
  *     --color-accent          #5DD35D   focus, progress fill, primary action
  *     --color-success         #3FAE57   SUCCESS state title
  *     --color-error           #E05252   ERROR state title, danger-button
+ *     --color-error-soft      #C56F6F   ERROR state description (round-2)
  *     --color-border          #2A3238   borders
  *     --color-border-strong   #3A454D   hover / focus borders
  *     --color-progress-track  #232B31   progress bar track
@@ -108,11 +109,6 @@
 }
 
 /* ── Current-file area ──────────────────────────────────────────── */
-
-.file-kind {
-    -fx-font-size: 13px;
-    -fx-text-fill: #A8B0BA;
-}
 
 .file-path {
     -fx-font-size: 13px;
@@ -315,8 +311,10 @@
     -fx-text-fill: #E05252;
 }
 
+/* The error description takes a softened red so the main title carries the
+   primary emphasis (round-2 refinement). */
 .root.error-state .status-description {
-    -fx-text-fill: #E05252;
+    -fx-text-fill: #C56F6F;
 }
 
 /* ── Quit-update Alert shares the same visual system ──────────────── */

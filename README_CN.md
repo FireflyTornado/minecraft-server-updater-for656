@@ -107,7 +107,45 @@ server=http://cdn1.example.com:25565,http://cdn2.example.com:8443
 -javaagent:UpdateAgent.jar=admin=true,server=http://override:25565
 ```
 
-### JavaFX 界面（实验性）
+### 选择性同步 (`update-config.json`)
+
+```json
+{
+  "managed_paths": ["mods/", "config/", "resourcepacks/", "options.txt"],
+  "excluded_paths": ["config/secret.cfg", "mods/skip_this/"]
+}
+```
+
+以 `/` 结尾匹配目录（递归），否则精确匹配文件。`excluded_paths` 优先级高于 `managed_paths` — 被排除的文件既不同步也不清理。默认值：`managed_paths: ["*"]`，`excluded_paths: []`。
+
+## 界面
+
+更新窗口由两个并行的视图之一渲染，它们实现同一个与工具包无关的 `UpdateView`
+契约 — **Swing**（默认）与 **JavaFX**（实验性）。业务层从不接触 UI 类型：它只
+发出 `UpdateEvent`（阶段、进度、日志），由视图负责渲染，因此两种工具包可以互换。
+
+### 更新阶段
+
+| 阶段 | 视觉表现 |
+|------|----------|
+| **Preparing（准备中）** | 获取清单并执行自更新检查 — 不确定状态进度条。更新器自更新是该阶段的子状态。 |
+| **Checking（检查中）** | 对照清单对受管文件进行哈希校验 — 确定性进度条 + 百分比（“X of Y files checked”）。 |
+| **Downloading（下载中）** | 下载受管文件；当前文件区域显示路径、单文件进度条与下载速度。 |
+| **Cleaning（清理中）** | 移除过期文件 — 不确定状态进度条。 |
+| **Success（成功）** | 流程完成且无失败 — 绿色标题，进度条 100%。 |
+| **Error（失败）** | 流程失败（异常或部分失败）— 红色标题，隐藏总进度条，自动展开 Details。 |
+
+阶段由 `UpdateEvent.StatusChanged` 显式携带；视图不会从状态文本中推断阶段。
+
+### 窗口布局
+
+- **状态标题 + 描述** — 每个阶段对应稳定的标题与重新措辞的副标题；原始业务状态字符串不会逐字显示。
+- **总体进度** — 细进度条 + 旁边的百分比（在 Preparing/Cleaning 不确定阶段隐藏）。
+- **当前文件区域** — 正在下载的文件/JAR：路径、单文件进度条、下载速度；空闲时隐藏。
+- **Details（可折叠）** — 服务器地址、游戏目录与完整日志；默认折叠，出错与调试模式下自动展开。
+- **关闭窗口** — 更新进行中关闭会弹窗确认（“Quit update?”）；成功/失败的终态阶段直接关闭。调试模式额外提供一个 Close 按钮，流程允许前保持禁用。
+
+### JavaFX 视图（实验性）
 
 更新窗口也可以使用 JavaFX 而非 Swing 渲染。这是对同一个与工具包无关的
 `UpdateView` 契约的功能正确的并行实现，位于 `agent/javafx/`。目前还不是默认实现。
@@ -132,16 +170,31 @@ server=http://cdn1.example.com:25565,http://cdn2.example.com:8443
    `-javaagent` 旁的启动 JVM 参数中加上 `agent/lib/javafx/*`）。如果 JavaFX
    实现缺失或无法启动，`UpdateAgent` 会记录警告并回退到 Swing 视图。
 
-### 选择性同步 (`update-config.json`)
+### 截图
 
-```json
-{
-  "managed_paths": ["mods/", "config/", "resourcepacks/", "options.txt"],
-  "excluded_paths": ["config/secret.cfg", "mods/skip_this/"]
-}
-```
+每一种界面状态都保存在 [`screenshots/`](screenshots/) 中 — 由开发工具
+`agent/devtools/UiScreenshotHarness.java` 离屏渲染生成：
 
-以 `/` 结尾匹配目录（递归），否则精确匹配文件。`excluded_paths` 优先级高于 `managed_paths` — 被排除的文件既不同步也不清理。默认值：`managed_paths: ["*"]`，`excluded_paths: []`。
+| 文件 | 状态 |
+|------|------|
+| `01_preparing.png` | 准备中 |
+| `02_updater_download.png` | 更新器自更新（准备中的子状态） |
+| `03_checking.png` | 检查中 |
+| `04_downloading.png` | 下载中 |
+| `05_cleaning.png` | 清理中 |
+| `06_success.png` | 成功 |
+| `07_partial_failure.png` | 部分失败（失败状态） |
+| `08_error.png` | 异常失败（失败状态） |
+| `09_debug_close_disabled.png` | 调试窗口，流程进行中关闭按钮禁用 |
+| `10_debug_close_enabled.png` | 调试窗口，流程完成后关闭按钮可用 |
+| `11_quit_alert.png` | “Quit update?” 退出确认弹窗 |
+
+> **重新生成截图**（在 `agent/` 目录下）：
+> ```bash
+> javac -encoding UTF-8 -cp "lib/javafx/*" -d build-harness src/*.java javafx/*.java devtools/*.java
+> cp javafx/ui.css build-harness/
+> java -cp "build-harness;lib/javafx/*" UiScreenshotHarness
+> ```
 
 ## 项目结构
 
@@ -150,6 +203,7 @@ server=http://cdn1.example.com:25565,http://cdn2.example.com:8443
 ├── LICENSE
 ├── README.md
 ├── README_CN.md
+├── screenshots/              # 每种界面状态的截图，由开发工具生成
 ├── server/
 │   ├── app.py                  # Flask API（清单、文件、Agent、配置、健康检查）
 │   ├── entrypoint.sh           # 容器入口
@@ -157,7 +211,7 @@ server=http://cdn1.example.com:25565,http://cdn2.example.com:8443
 │   └── requirements.txt
 └── agent/
     ├── META-INF/MANIFEST.MF   # Premain-Class: Launcher
-    ├── src/
+    ├── src/                   # 业务层 + Swing 视图（始终编译）
     │   ├── Launcher.java           # -javaagent 入口；用 .new 替换核心 JAR 并动态加载
     │   ├── UpdateAgent.java        # 核心入口（premain）：配置解析 + 更新流程
     │   ├── UpdateApplication.java  # 组合根：串联服务、视图与控制器；不持有任何流程决策
@@ -168,7 +222,7 @@ server=http://cdn1.example.com:25565,http://cdn2.example.com:8443
     │   ├── UpdateListener.java     # 业务层 → 界面事件回调接口（不依赖 Swing）
     │   ├── UpdateView.java         # 与 UI 工具包无关的视图契约（open/close/状态等；不含 Swing/JavaFX 类型）
     │   ├── UpdateViewListener.java # 视图 → 控制器的用户操作回调（关闭窗口 / 调试关闭按钮）
-    │   ├── UpdateGUI.java          # Swing 界面（状态、进度、日志、速度）；实现 UpdateView；由应用流程打开/关闭
+    │   ├── UpdateGUI.java          # Swing 界面（状态、进度、日志、速度）；实现 UpdateView
     │   ├── UiModel.java            # 传给界面的不可变展示数据
     │   ├── UiDispatcher.java       # 对 UI 工具包「在 UI 线程执行」的抽象
     │   ├── SwingUiDispatcher.java  # 基于 Swing EDT 的 UiDispatcher 实现
@@ -180,11 +234,14 @@ server=http://cdn1.example.com:25565,http://cdn2.example.com:8443
     │   ├── DownloadProgress.java   # 单文件下载进度快照（工作线程 ↔ 界面）
     │   ├── JsonParser.java         # 轻量 JSON 解析辅助（无外部依赖）
     │   └── FormatUtil.java         # 格式化辅助（如下载速度）
-    ├── javafx/                 # JavaFX 界面 — UpdateView 的并行实现（仅在 --javafx 构建时编译）
+    ├── javafx/                 # JavaFX 视图 — UpdateView 的并行实现（仅在 --javafx 构建时编译）
     │   ├── JavaFxEntryPoint.java    # JavaFX 组合根（由 UpdateAgent 反射调用）
     │   ├── JavaFxUiDispatcher.java  # 基于 Platform.runLater 的 UiDispatcher
-    │   ├── JavaFxUpdateView.java    # 实现 UpdateView 的 JavaFX 视图（六种状态）
-    │   └── ui.css                   # 使用css控制ui控件   
+    │   ├── JavaFxUpdateView.java    # 实现 UpdateView 的 JavaFX 视图（六种状态，由 /ui.css 提供样式）
+    │   └── ui.css                   # 窗口与对话框共用的深色扁平视觉系统
+    ├── devtools/               # 仅开发用工具 — 不打包进 Agent JAR
+    │   └── UiScreenshotHarness.java  # 离屏渲染每种界面状态到 screenshots/*.png
+    ├── lib/javafx/             # JavaFX 21 运行时 jar（javafx-base/-graphics/-controls/-swing，win）— --javafx 构建所需
     ├── build.sh / build.bat    # 编译并打包两个 JAR（--javafx 追加 JavaFX 视图）
     └── setup-agent.sh / setup-agent.bat  # 写入配置并追加 -javaagent 到 JVM 参数
 ```

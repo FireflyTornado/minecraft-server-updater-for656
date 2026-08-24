@@ -15,6 +15,8 @@ import javafx.scene.layout.VBox;
 import javafx.stage.Stage;
 
 import java.util.List;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * JavaFX implementation of the toolkit-agnostic {@link UpdateView} contract,
@@ -61,8 +63,14 @@ class JavaFxUpdateView implements UpdateView {
     private final UpdateViewListener listener;
     private final boolean debug;
 
+    // Window sizing: normal mode is deliberately short (Details collapsed);
+    // expanding Details (debug mode or error state) grows the window.
+    private static final double WINDOW_WIDTH = 520;
+    private static final double WINDOW_HEIGHT_COLLAPSED = 300;
+    private static final double WINDOW_HEIGHT_EXPANDED = 460;
+
     // Overall progress area
-    private final Label lblStatus = new Label("Checking for updates...");
+    private final Label lblStatus = new Label("Preparing update…");
     private final Label lblDescription = new Label("");
     private final HBox overallArea = new HBox(6);
     private final ProgressBar overallBar = new ProgressBar(0);
@@ -70,10 +78,13 @@ class JavaFxUpdateView implements UpdateView {
 
     // Current-file / per-download area
     private final VBox dlArea = new VBox(4);
-    private final Label lblDlKind = new Label();
     private final Label lblDlFile = new Label();
     private final ProgressBar dlBar = new ProgressBar(0);
     private final Label lblDlSpeed = new Label("");
+
+    // Counters backing the informational subtitles (see showStatus).
+    private int filesSeen;   // per-file downloads started in this run
+    private int filesTotal;  // managed file count, captured from CHECKING text
 
     // Details area (Server URL, Game Directory, full log)
     private final TitledPane detailsPane = new TitledPane("Details", null);
@@ -90,6 +101,12 @@ class JavaFxUpdateView implements UpdateView {
     /** External form of /ui.css, or null if the stylesheet is missing. */
     private final String stylesheet;
 
+    /** The scene backing the window; resized when Details expands/collapses. */
+    private Scene scene;
+
+    /** The destructive "Skip update" action, created per Quit-alert instance. */
+    private ButtonType quitSkipType;
+
     private UpdatePhase phase = UpdatePhase.PREPARING;
 
     JavaFxUpdateView(UpdateViewListener listener, UiModel model) {
@@ -104,18 +121,56 @@ class JavaFxUpdateView implements UpdateView {
     // ── UpdateView ────────────────────────────────────────────────
 
     /**
-     * Update the status text, optional description and whether the overall bar
-     * is indeterminate. The phase is carried explicitly by the business layer,
-     * so no string matching is needed to classify the flow.
+     * Rebuild the status hierarchy from the business event. The raw business
+     * status string is never shown verbatim as the visual title: each phase
+     * maps to a stable main title, and the count / detail is re-worded into the
+     * subtitle below it. The file path stays in the current-file area, never in
+     * the title.
      */
     @Override
     public void showStatus(UpdatePhase phase, String status, String description, boolean indeterminate) {
-        lblStatus.setText(status);
-        lblDescription.setText(description == null ? "" : description);
         if (indeterminate) {
             overallBar.setProgress(ProgressBar.INDETERMINATE_PROGRESS);
         }
         setPhase(phase);
+        switch (phase) {
+            case PREPARING:
+                // A new run starts here — reset the file counters.
+                filesSeen = 0;
+                filesTotal = 0;
+                lblStatus.setText("Preparing update…");
+                lblDescription.setText("Connecting to update server");
+                break;
+            case CHECKING: {
+                int[] counts = extractFileCounts(status);
+                if (counts != null) {
+                    filesTotal = counts[1];
+                }
+                lblStatus.setText("Checking files…");
+                lblDescription.setText(counts != null
+                        ? formatCount(counts[0]) + " of " + formatCount(counts[1]) + " files checked"
+                        : "Checking files…");
+                break;
+            }
+            case DOWNLOADING:
+                filesSeen++;
+                lblStatus.setText("Downloading update…");
+                lblDescription.setText(filesTotal > 0
+                        ? formatCount(filesSeen) + " of " + formatCount(filesTotal) + " files"
+                        : formatCount(filesSeen) + " file(s)");
+                break;
+            case CLEANING:
+                lblStatus.setText("Cleaning up…");
+                lblDescription.setText(description == null || description.isEmpty()
+                        ? "Removing files that are no longer needed"
+                        : description);
+                break;
+            default:
+                // Terminal phases are rendered by showCompleted / showError.
+                lblStatus.setText(status);
+                lblDescription.setText(description == null ? "" : description);
+                break;
+        }
     }
 
     /** Append one log line to the Details log. */
@@ -124,9 +179,16 @@ class JavaFxUpdateView implements UpdateView {
         logArea.appendText(message + "\n");
     }
 
-    /** Set the overall progress percentage (0-100). */
+    /**
+     * Set the overall progress percentage (0-100). PREPARING and CLEANING keep
+     * an indeterminate bar with the percentage hidden; only the determinate
+     * CHECKING / DOWNLOADING phases display a percentage.
+     */
     @Override
     public void showOverallProgress(int percent) {
+        if (phase == UpdatePhase.PREPARING || phase == UpdatePhase.CLEANING) {
+            return;
+        }
         int p = clamp(percent);
         overallBar.setProgress(p / 100.0);
         lblOverallPct.setText(p + "%");
@@ -137,7 +199,8 @@ class JavaFxUpdateView implements UpdateView {
      * and clears the current-file area; an active one switches the phase to
      * DOWNLOADING for a regular managed file, or stays in PREPARING for the
      * updater self-update (a sub-state of PREPARING), and shows the
-     * current-file area with the kind-specific text.
+     * current-file area with the object name, progress and speed. The file or
+     * JAR name lives only in this area — never in the status title.
      */
     @Override
     public void showDownloadProgress(DownloadProgress progress) {
@@ -147,7 +210,12 @@ class JavaFxUpdateView implements UpdateView {
         }
         boolean updater = progress.kind == DownloadProgress.Kind.UPDATER;
         setPhase(updater ? UpdatePhase.PREPARING : UpdatePhase.DOWNLOADING);
-        lblDlKind.setText(updater ? "Updating updater…" : "Downloading update…");
+        if (updater) {
+            // The updater self-update never exposes the "agent" jargon in the
+            // normal UI — the title and subtitle stay user-facing.
+            lblStatus.setText("Updating updater…");
+            lblDescription.setText("Preparing update components");
+        }
         lblDlFile.setText(progress.path == null ? "" : progress.path);
         if (progress.totalBytes > 0) {
             int pct = clamp((int) (progress.downloadedBytes * 100 / progress.totalBytes));
@@ -184,17 +252,22 @@ class JavaFxUpdateView implements UpdateView {
             // any residue, expands Details and hides the current-file area. The
             // failure count becomes the error summary, mirroring showError().
             setPhase(UpdatePhase.ERROR);
-            lblStatus.setText("Update finished with " + result.failed + " error(s)");
+            lblStatus.setText("Update failed");
             lblDescription.setText(result.failed + " file(s) failed to update.");
             showLog("[ERROR] " + result.failed + " file(s) failed to update.");
         } else {
+            // Success is split into a main title and a subtitle so the green
+            // accent marks only the headline, not the whole sentence.
             setPhase(UpdatePhase.SUCCESS);
             overallBar.setProgress(1.0);
             lblOverallPct.setText("100%");
-            lblStatus.setText(result.updated > 0
-                    ? "Updated " + result.updated + " file(s), launching Minecraft..."
-                    : "Already up to date, launching Minecraft...");
-            lblDescription.setText("");
+            if (result.updated > 0) {
+                lblStatus.setText("Update complete");
+                lblDescription.setText(formatFiles(result.updated) + " updated · Launching Minecraft…");
+            } else {
+                lblStatus.setText("You're up to date");
+                lblDescription.setText("Launching Minecraft…");
+            }
         }
         if (debug) {
             setCloseEnabled(true);
@@ -251,17 +324,24 @@ class JavaFxUpdateView implements UpdateView {
         root.getStyleClass().removeAll("success-state", "error-state");
         switch (p) {
             case PREPARING:
-            case CHECKING:
             case CLEANING:
+                // Indeterminate phases hide the percentage entirely, so a stale
+                // value (e.g. the previous 55%) never lingers beside the bar.
                 hideDownloadArea();
+                clearOverallPercent();
                 logArea.setPrefRowCount(6);
                 break;
+            case CHECKING:
             case DOWNLOADING:
-                // Current-file area is shown by showDownloadProgress.
+                // Determinate phases show the percentage. The current-file area
+                // is (re)shown by showDownloadProgress for DOWNLOADING.
+                hideDownloadArea();
+                showOverallPercent();
                 logArea.setPrefRowCount(6);
                 break;
             case SUCCESS:
                 hideDownloadArea();
+                showOverallPercent();
                 logArea.setPrefRowCount(6);
                 root.getStyleClass().add("success-state");
                 break;
@@ -281,6 +361,19 @@ class JavaFxUpdateView implements UpdateView {
         }
     }
 
+    /** Hide the overall percentage label, clearing any stale text. */
+    private void clearOverallPercent() {
+        lblOverallPct.setText("");
+        lblOverallPct.setVisible(false);
+        lblOverallPct.setManaged(false);
+    }
+
+    /** Show the overall percentage label next to the bar. */
+    private void showOverallPercent() {
+        lblOverallPct.setVisible(true);
+        lblOverallPct.setManaged(true);
+    }
+
     private void showDownloadArea() {
         dlArea.setVisible(true);
         dlArea.setManaged(true);
@@ -290,7 +383,6 @@ class JavaFxUpdateView implements UpdateView {
     private void hideDownloadArea() {
         dlArea.setVisible(false);
         dlArea.setManaged(false);
-        lblDlKind.setText("");
         lblDlFile.setText("");
         dlBar.setProgress(0);
         lblDlSpeed.setText("");
@@ -298,6 +390,35 @@ class JavaFxUpdateView implements UpdateView {
 
     private static int clamp(int value) {
         return Math.max(0, Math.min(100, value));
+    }
+
+    /** Business CHECKING status carries "{checked}/{total}", e.g. "Checked: 247/1247". */
+    private static final Pattern FILE_COUNT_PATTERN = Pattern.compile("(\\d+)/(\\d+)");
+
+    /** Parse "{checked}/{total}" out of a business CHECKING status string. */
+    private static int[] extractFileCounts(String status) {
+        if (status == null) {
+            return null;
+        }
+        Matcher m = FILE_COUNT_PATTERN.matcher(status);
+        if (m.find()) {
+            try {
+                return new int[]{Integer.parseInt(m.group(1)), Integer.parseInt(m.group(2))};
+            } catch (NumberFormatException e) {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    /** Render a count with thousands grouping, e.g. 1247 → "1,247". */
+    private static String formatCount(int n) {
+        return String.format("%,d", n);
+    }
+
+    /** Natural plural for a file count, e.g. 1 → "1 file", 3 → "3 files". */
+    private static String formatFiles(int n) {
+        return formatCount(n) + (n == 1 ? " file" : " files");
     }
 
     // ── Window close handling ─────────────────────────────────────
@@ -326,37 +447,48 @@ class JavaFxUpdateView implements UpdateView {
 
     /**
      * Ask whether to abandon the running update. The default action stays with
-     * the update; only an explicit "Skip and launch anyway" invokes the
-     * existing {@link UpdateViewListener} close flow. Closing the dialog also
-     * counts as staying. The dialog shares the main window's stylesheet, and
-     * the skip button gets the {@code danger-button} class so it renders as
-     * the destructive action.
+     * the update; only an explicit "Skip update" invokes the existing
+     * {@link UpdateViewListener} close flow. Closing the dialog also counts as
+     * staying. The dialog shares the main window's stylesheet, and the skip
+     * button gets the {@code danger-button} class so it renders as the
+     * destructive action.
      */
     private void confirmQuit() {
-        Alert alert = new Alert(Alert.AlertType.CONFIRMATION);
+        Alert alert = createQuitAlert();
+        alert.showAndWait().ifPresent(choice -> {
+            if (choice == quitSkipType) {
+                listener.onWindowClosed();
+                stage.close();
+            }
+        });
+    }
+
+    /**
+     * Build the "Quit update?" confirmation. Exposed as a factory (rather than
+     * constructed inline) so the screenshot harness can render it. Uses
+     * {@link Alert.AlertType#NONE} so no default Question icon appears — the
+     * dialog is deliberately icon-free to match the flat visual system.
+     */
+    Alert createQuitAlert() {
+        Alert alert = new Alert(Alert.AlertType.NONE);
         alert.setTitle("Quit update?");
         alert.setHeaderText(null);
-        alert.setContentText("An update is still in progress.\n\nQuit update?");
-        ButtonType stay = new ButtonType("Stay and finish update", ButtonBar.ButtonData.OK_DONE);
-        ButtonType skip = new ButtonType("Skip and launch anyway", ButtonBar.ButtonData.OTHER);
-        alert.getButtonTypes().setAll(stay, skip);
+        alert.setContentText("The update is still in progress. Skipping it may leave Minecraft out of date.");
+        ButtonType stay = new ButtonType("Keep updating", ButtonBar.ButtonData.OK_DONE);
+        quitSkipType = new ButtonType("Skip update", ButtonBar.ButtonData.OTHER);
+        alert.getButtonTypes().setAll(stay, quitSkipType);
         alert.initOwner(stage);
         // Apply the same visual system as the main window.
         if (stylesheet != null) {
             alert.getDialogPane().getStylesheets().add(stylesheet);
         }
         alert.getDialogPane().getStyleClass().add("root");
-        // "Skip and launch anyway" is the destructive action — style it red.
-        Button skipButton = (Button) alert.getDialogPane().lookupButton(skip);
+        // "Skip update" is the destructive action — style it red.
+        Button skipButton = (Button) alert.getDialogPane().lookupButton(quitSkipType);
         skipButton.getStyleClass().add("danger-button");
         // Enter / the default stays with the update.
         ((Button) alert.getDialogPane().lookupButton(stay)).setDefaultButton(true);
-        alert.showAndWait().ifPresent(choice -> {
-            if (choice == skip) {
-                listener.onWindowClosed();
-                stage.close();
-            }
-        });
+        return alert;
     }
 
     // ── Construction ──────────────────────────────────────────────
@@ -382,14 +514,13 @@ class JavaFxUpdateView implements UpdateView {
         overallArea.setAlignment(Pos.CENTER_LEFT);
         overallBar.setProgress(ProgressBar.INDETERMINATE_PROGRESS);
 
-        // Current-file area: kind, path, bar, speed. Hidden until a download
-        // becomes active.
+        // Current-file area: path, bar, speed. Hidden until a download becomes
+        // active; the phase title above already names the action.
         dlArea.getStyleClass().add("file-area");
-        lblDlKind.getStyleClass().add("file-kind");
         lblDlFile.getStyleClass().add("file-path");
         dlBar.getStyleClass().add("file-progress");
         lblDlSpeed.getStyleClass().add("download-speed");
-        dlArea.getChildren().addAll(lblDlKind, lblDlFile, dlBar, lblDlSpeed);
+        dlArea.getChildren().addAll(lblDlFile, dlBar, lblDlSpeed);
         dlArea.setVisible(false);
         dlArea.setManaged(false);
 
@@ -407,7 +538,9 @@ class JavaFxUpdateView implements UpdateView {
 
         // Root layout.
         lblDescription.setWrapText(true);
-        root.setPadding(new Insets(12));
+        // Roomier canvas: wider horizontal padding and a little more vertical
+        // breathing room, inside a shorter normal-mode window.
+        root.setPadding(new Insets(18, 22, 18, 22));
         root.getChildren().addAll(lblStatus, lblDescription, overallArea, dlArea, detailsPane);
 
         // Debug close button — only present in debug mode, enabled by the
@@ -422,10 +555,39 @@ class JavaFxUpdateView implements UpdateView {
         }
 
         // Apply the shared visual system (ui.css) — normal and debug alike.
-        Scene scene = new Scene(root, 520, 420);
+        // Short by default; the window grows when Details expands (debug mode
+        // and the error state) so collapsed layouts never sit in a tall window
+        // full of dead space.
+        scene = new Scene(root, WINDOW_WIDTH,
+                debug ? WINDOW_HEIGHT_EXPANDED : WINDOW_HEIGHT_COLLAPSED);
         if (stylesheet != null) {
             scene.getStylesheets().add(stylesheet);
         }
         stage.setScene(scene);
+        stage.setMinWidth(WINDOW_WIDTH - 40);
+        stage.setMinHeight(WINDOW_HEIGHT_COLLAPSED);
+        detailsPane.expandedProperty().addListener((obs, wasExpanded, expanded) ->
+                applyWindowHeight(expanded));
+    }
+
+    /**
+     * Resize the window so the client area (the scene) matches the target
+     * height for the Details state. The stage height includes window chrome,
+     * so the chrome is measured from the live window — Details toggles always
+     * happen after the window is shown.
+     */
+    private void applyWindowHeight(boolean expanded) {
+        if (stage.getScene() == null || !stage.isShowing()) {
+            return;
+        }
+        double sceneHeight = stage.getScene().getHeight();
+        if (sceneHeight <= 0) {
+            return;
+        }
+        double chrome = stage.getHeight() - sceneHeight;
+        double target = (expanded ? WINDOW_HEIGHT_EXPANDED : WINDOW_HEIGHT_COLLAPSED) + chrome;
+        if (Math.abs(stage.getHeight() - target) > 1.0) {
+            stage.setHeight(target);
+        }
     }
 }
