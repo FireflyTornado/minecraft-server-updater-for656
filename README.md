@@ -167,6 +167,7 @@ Paths ending with `/` match directories recursively; bare names match exact file
     │   ├── UpdateController.java   # Controller/flow layer: coordinates service + view + app flow; decides start/success/failure/close/delay/latch release
     │   ├── UpdateService.java      # Update logic: manifest, hashing, download, cleanup, self-update; emits UpdateEvents
     │   ├── UpdateEvent.java        # Unified business event model (no Swing dependency)
+    │   ├── UpdatePhase.java        # Shared visual phase enum for the update flow (toolkit-agnostic)
     │   ├── UpdateListener.java     # Business→UI event callback interface (no Swing dependency)
     │   ├── UpdateView.java         # Toolkit-agnostic UI contract (open/close/status/...; no Swing/JavaFX types)
     │   ├── UpdateViewListener.java # View→controller user-action callback (window close / debug close)
@@ -185,7 +186,7 @@ Paths ending with `/` match directories recursively; bare names match exact file
     ├── javafx/                 # JavaFX UI — parallel impl of UpdateView (built only with --javafx)
     │   ├── JavaFxEntryPoint.java    # JavaFX composition root (reached reflectively from UpdateAgent)
     │   ├── JavaFxUiDispatcher.java  # UiDispatcher backed by Platform.runLater
-    │   └── JavaFxUpdateView.java    # JavaFX view implementing UpdateView (six phases)
+    │   ├── JavaFxUpdateView.java    # JavaFX view implementing UpdateView (six phases)
     ├── build.sh / build.bat    # Compile + package both JARs (--javafx adds the JavaFX view)
     └── setup-agent.sh / setup-agent.bat  # Write config + append -javaagent to JVM args
 ```

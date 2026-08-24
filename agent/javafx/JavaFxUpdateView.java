@@ -1,7 +1,10 @@
 import javafx.geometry.Insets;
 import javafx.geometry.Pos;
 import javafx.scene.Scene;
+import javafx.scene.control.Alert;
 import javafx.scene.control.Button;
+import javafx.scene.control.ButtonBar;
+import javafx.scene.control.ButtonType;
 import javafx.scene.control.Label;
 import javafx.scene.control.ProgressBar;
 import javafx.scene.control.TextArea;
@@ -25,25 +28,31 @@ import java.util.List;
  * invoked on the JavaFX Application Thread; the {@link UpdateController}
  * guarantees this by marshalling every call through a {@link UiDispatcher}.
  *
- * The six visual phases:
+ * The six main visual phases (see {@link UpdatePhase}):
  * <ul>
- *   <li>{@code CHECKING}  — fetching the manifest (indeterminate bar)</li>
- *   <li>{@code DOWNLOADING} — downloading a regular managed file</li>
- *   <li>{@code UPDATER}   — downloading the agent self-update</li>
- *   <li>{@code CLEANING}  — removing stale files (indeterminate bar)</li>
- *   <li>{@code SUCCESS}   — flow completed (bar at 100%)</li>
- *   <li>{@code ERROR}     — flow failed (bar hidden, error summary)</li>
+ *   <li>{@code PREPARING} — fetching the manifest and running the self-update
+ *       check (indeterminate bar). The updater download is a sub-state of this
+ *       phase, distinguished by {@link DownloadProgress.Kind#UPDATER} and shown
+ *       through the current-file area.</li>
+ *   <li>{@code CHECKING}   — hashing managed files against the manifest</li>
+ *   <li>{@code DOWNLOADING}— downloading a regular managed file</li>
+ *   <li>{@code CLEANING}   — removing stale files (indeterminate bar)</li>
+ *   <li>{@code SUCCESS}    — flow completed with no failed files (bar at 100%)</li>
+ *   <li>{@code ERROR}      — flow failed — exception or partial failure (bar
+ *                            hidden, error summary)</li>
  * </ul>
+ *
+ * The phase is carried explicitly by {@link UpdateEvent.StatusChanged}, so the
+ * view never infers it from status text.
+ *
+ * While an update is in progress (PREPARING/CHECKING/DOWNLOADING/CLEANING) the
+ * window close request is intercepted and the user must confirm quitting; in
+ * the terminal SUCCESS/ERROR phases the close request is honoured directly.
  *
  * This is a functionally-correct skeleton: default JavaFX look, no CSS,
  * animations or icons.
  */
 class JavaFxUpdateView implements UpdateView {
-
-    /** The six visual phases the update flow can be in. */
-    enum Phase {
-        CHECKING, DOWNLOADING, UPDATER, CLEANING, SUCCESS, ERROR
-    }
 
     private final Stage stage;
     private final UpdateViewListener listener;
@@ -72,7 +81,7 @@ class JavaFxUpdateView implements UpdateView {
     // Debug close button
     private final Button btnClose = new Button("Close");
 
-    private Phase phase = Phase.CHECKING;
+    private UpdatePhase phase = UpdatePhase.PREPARING;
 
     JavaFxUpdateView(UpdateViewListener listener, UiModel model) {
         this.listener = listener;
@@ -85,22 +94,17 @@ class JavaFxUpdateView implements UpdateView {
 
     /**
      * Update the status text, optional description and whether the overall bar
-     * is indeterminate. Also classifies the flow phase: the cleaning status
-     * (sent explicitly by the business layer) and the indeterminate checking
-     * status are the two phases that arrive here.
+     * is indeterminate. The phase is carried explicitly by the business layer,
+     * so no string matching is needed to classify the flow.
      */
     @Override
-    public void showStatus(String status, String description, boolean indeterminate) {
+    public void showStatus(UpdatePhase phase, String status, String description, boolean indeterminate) {
         lblStatus.setText(status);
         lblDescription.setText(description == null ? "" : description);
         if (indeterminate) {
             overallBar.setProgress(ProgressBar.INDETERMINATE_PROGRESS);
         }
-        if (status != null && status.contains("Cleaning")) {
-            setPhase(Phase.CLEANING);
-        } else if (indeterminate) {
-            setPhase(Phase.CHECKING);
-        }
+        setPhase(phase);
     }
 
     /** Append one log line to the Details log. */
@@ -120,7 +124,9 @@ class JavaFxUpdateView implements UpdateView {
     /**
      * Present a per-file / agent download snapshot. An inactive snapshot hides
      * and clears the current-file area; an active one switches the phase to
-     * DOWNLOADING or UPDATER based on the download kind.
+     * DOWNLOADING for a regular managed file, or stays in PREPARING for the
+     * updater self-update (a sub-state of PREPARING), and shows the
+     * current-file area with the kind-specific text.
      */
     @Override
     public void showDownloadProgress(DownloadProgress progress) {
@@ -128,16 +134,15 @@ class JavaFxUpdateView implements UpdateView {
             hideDownloadArea();
             return;
         }
-        setPhase(progress.kind == DownloadProgress.Kind.UPDATER
-                ? Phase.UPDATER : Phase.DOWNLOADING);
-        lblDlKind.setText(progress.kind == DownloadProgress.Kind.UPDATER
-                ? "Updating updater…"
-                : "Downloading update…");
+        boolean updater = progress.kind == DownloadProgress.Kind.UPDATER;
+        setPhase(updater ? UpdatePhase.PREPARING : UpdatePhase.DOWNLOADING);
+        lblDlKind.setText(updater ? "Updating updater…" : "Downloading update…");
         lblDlFile.setText(progress.path == null ? "" : progress.path);
         if (progress.totalBytes > 0) {
             int pct = clamp((int) (progress.downloadedBytes * 100 / progress.totalBytes));
             dlBar.setProgress(pct / 100.0);
         } else {
+            // Unknown content-length: indeterminate per-file bar.
             dlBar.setProgress(ProgressBar.INDETERMINATE_PROGRESS);
         }
         lblDlSpeed.setText(FormatUtil.formatSpeed(progress.bytesPerSecond));
@@ -153,22 +158,31 @@ class JavaFxUpdateView implements UpdateView {
     }
 
     /**
-     * The update completed — render the SUCCESS state with a full bar and a
-     * success summary. Flow control after completion is the application's job.
+     * The update completed. A fully successful run ({@code failed == 0}) renders
+     * the SUCCESS state with a full bar and a success summary; a partial failure
+     * ({@code failed > 0}) renders the ERROR state — the same visual base state
+     * as an exception failure, with the overall bar hidden, Details expanded and
+     * the failure count shown as the error summary. Flow control after
+     * completion is the application's job.
      */
     @Override
     public void showCompleted(UpdateResult result) {
-        setPhase(Phase.SUCCESS);
-        overallBar.setProgress(1.0);
-        lblOverallPct.setText("100%");
         if (result.failed > 0) {
+            // Partial failure — reuse the ERROR visual base state shared with
+            // exception failures: setPhase(ERROR) hides the overall bar, resets
+            // any residue, expands Details and hides the current-file area. The
+            // failure count becomes the error summary, mirroring showError().
+            setPhase(UpdatePhase.ERROR);
             lblStatus.setText("Update finished with " + result.failed + " error(s)");
-            lblDescription.setText("");
-        } else if (result.updated > 0) {
-            lblStatus.setText("Updated " + result.updated + " file(s), launching Minecraft...");
-            lblDescription.setText("");
+            lblDescription.setText(result.failed + " file(s) failed to update.");
+            showLog("[ERROR] " + result.failed + " file(s) failed to update.");
         } else {
-            lblStatus.setText("Already up to date, launching Minecraft...");
+            setPhase(UpdatePhase.SUCCESS);
+            overallBar.setProgress(1.0);
+            lblOverallPct.setText("100%");
+            lblStatus.setText(result.updated > 0
+                    ? "Updated " + result.updated + " file(s), launching Minecraft..."
+                    : "Already up to date, launching Minecraft...");
             lblDescription.setText("");
         }
         if (debug) {
@@ -178,14 +192,14 @@ class JavaFxUpdateView implements UpdateView {
     }
 
     /**
-     * The update failed — render the ERROR state: overall bar hidden, an error
-     * summary as the description, and the Details area expanded so the log is
-     * reachable. v1 implements no Retry.
+     * The update failed — render the ERROR state: overall bar reset and hidden,
+     * an error summary as the description, and the Details area expanded so the
+     * log is reachable. v1 implements no Retry.
      */
     @Override
     public void showError(String message, Throwable cause) {
         String msg = message == null ? "Unknown error" : message;
-        setPhase(Phase.ERROR);
+        setPhase(UpdatePhase.ERROR);
         lblStatus.setText("Update failed");
         lblDescription.setText(msg);
         showLog("[ERROR] " + msg);
@@ -212,27 +226,30 @@ class JavaFxUpdateView implements UpdateView {
     // ── Phase rendering ───────────────────────────────────────────
 
     /** Track the current phase and apply the phase-specific rendering. */
-    private void setPhase(Phase p) {
+    private void setPhase(UpdatePhase p) {
         if (phase == p) {
             return;
         }
         phase = p;
         switch (p) {
+            case PREPARING:
             case CHECKING:
             case CLEANING:
             case SUCCESS:
                 hideDownloadArea();
                 break;
+            case DOWNLOADING:
+                // Current-file area is shown by showDownloadProgress.
+                break;
             case ERROR:
                 hideDownloadArea();
-                // Error hides the overall progress bar and points at Details.
+                // Error hides the overall progress bar, resets any residue
+                // (e.g. a previous 100%) and points at Details.
+                overallBar.setProgress(0);
+                lblOverallPct.setText("");
                 overallArea.setVisible(false);
                 overallArea.setManaged(false);
                 detailsPane.setExpanded(true);
-                break;
-            case DOWNLOADING:
-            case UPDATER:
-                // Current-file area is shown by showDownloadProgress.
                 break;
         }
     }
@@ -256,12 +273,63 @@ class JavaFxUpdateView implements UpdateView {
         return Math.max(0, Math.min(100, value));
     }
 
+    // ── Window close handling ─────────────────────────────────────
+
+    /** True while the update flow is still running (non-terminal phases). */
+    private boolean isUpdateInProgress() {
+        return phase == UpdatePhase.PREPARING
+                || phase == UpdatePhase.CHECKING
+                || phase == UpdatePhase.DOWNLOADING
+                || phase == UpdatePhase.CLEANING;
+    }
+
+    /**
+     * Intercept the window close request. While an update is running the close
+     * is consumed and the user is asked to confirm; the terminal SUCCESS/ERROR
+     * phases close directly without a second prompt.
+     */
+    private void onCloseRequestedByUser(javafx.event.Event event) {
+        if (isUpdateInProgress()) {
+            event.consume();
+            confirmQuit();
+        } else {
+            listener.onWindowClosed();
+        }
+    }
+
+    /**
+     * Ask whether to abandon the running update. The default action stays with
+     * the update; only an explicit "Skip and launch anyway" invokes the
+     * existing {@link UpdateViewListener} close flow. Closing the dialog also
+     * counts as staying. (Danger styling of the skip button is deferred to the
+     * CSS step.)
+     */
+    private void confirmQuit() {
+        Alert alert = new Alert(Alert.AlertType.CONFIRMATION);
+        alert.setTitle("Quit update?");
+        alert.setHeaderText(null);
+        alert.setContentText("An update is still in progress.\n\nQuit update?");
+        ButtonType stay = new ButtonType("Stay and finish update", ButtonBar.ButtonData.OK_DONE);
+        ButtonType skip = new ButtonType("Skip and launch anyway", ButtonBar.ButtonData.OTHER);
+        alert.getButtonTypes().setAll(stay, skip);
+        alert.initOwner(stage);
+        // Enter / the default stays with the update.
+        ((Button) alert.getDialogPane().lookupButton(stay)).setDefaultButton(true);
+        alert.showAndWait().ifPresent(choice -> {
+            if (choice == skip) {
+                listener.onWindowClosed();
+                stage.close();
+            }
+        });
+    }
+
     // ── Construction ──────────────────────────────────────────────
 
     private void initUI(UiModel model) {
         stage.setTitle("Minecraft Update Check");
-        // Forward the user closing the window to the flow controller.
-        stage.setOnCloseRequest(e -> listener.onWindowClosed());
+        // Forward the user closing the window to the flow controller, gated by
+        // the in-progress confirmation.
+        stage.setOnCloseRequest(e -> onCloseRequestedByUser(e));
 
         // Overall progress area: bar + percent label.
         lblOverallPct.setPrefWidth(44);

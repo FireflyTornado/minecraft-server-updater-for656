@@ -164,6 +164,7 @@ server=http://cdn1.example.com:25565,http://cdn2.example.com:8443
     │   ├── UpdateController.java   # 控制器/流程层：协调服务、视图与应用流程；决定启动/成功/失败/关闭/延迟/释放 latch
     │   ├── UpdateService.java      # 更新逻辑：清单、哈希校验、下载、清理、自更新；发出 UpdateEvent
     │   ├── UpdateEvent.java        # 统一的业务事件模型（不依赖 Swing）
+    │   ├── UpdatePhase.java        # 更新流程共享的视觉阶段枚举（与 UI 工具包无关）
     │   ├── UpdateListener.java     # 业务层 → 界面事件回调接口（不依赖 Swing）
     │   ├── UpdateView.java         # 与 UI 工具包无关的视图契约（open/close/状态等；不含 Swing/JavaFX 类型）
     │   ├── UpdateViewListener.java # 视图 → 控制器的用户操作回调（关闭窗口 / 调试关闭按钮）
@@ -182,7 +183,7 @@ server=http://cdn1.example.com:25565,http://cdn2.example.com:8443
     ├── javafx/                 # JavaFX 界面 — UpdateView 的并行实现（仅在 --javafx 构建时编译）
     │   ├── JavaFxEntryPoint.java    # JavaFX 组合根（由 UpdateAgent 反射调用）
     │   ├── JavaFxUiDispatcher.java  # 基于 Platform.runLater 的 UiDispatcher
-    │   └── JavaFxUpdateView.java    # 实现 UpdateView 的 JavaFX 视图（六种状态）
+    │   ├── JavaFxUpdateView.java    # 实现 UpdateView 的 JavaFX 视图（六种状态）
     ├── build.sh / build.bat    # 编译并打包两个 JAR（--javafx 追加 JavaFX 视图）
     └── setup-agent.sh / setup-agent.bat  # 写入配置并追加 -javaagent 到 JVM 参数
 ```

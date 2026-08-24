@@ -60,7 +60,8 @@ class UpdateService {
         log(listener, "Game dir: " + gameDir);
 
         // 1. fetch manifest (with multi-server fallback)
-        emit(listener, new UpdateEvent.StatusChanged("Checking for updates...", null, true));
+        emit(listener, new UpdateEvent.StatusChanged(UpdatePhase.PREPARING,
+                "Checking for updates...", null, true));
         log(listener, "Fetching manifest...");
         String manifestJson = client.httpGetWithFallback("/api/v2/manifest");
 
@@ -96,7 +97,8 @@ class UpdateService {
             if (localFile == null) {
                 log(listener, "  [REJECT] " + relPath + " (unsafe manifest path)");
                 failed++;
-                emit(listener, new UpdateEvent.StatusChanged("Rejected unsafe path: " + checked + "/" + total, null, false));
+                emit(listener, new UpdateEvent.StatusChanged(UpdatePhase.CHECKING,
+                        "Rejected unsafe path: " + checked + "/" + total, null, false));
                 emit(listener, new UpdateEvent.OverallProgressChanged(total > 0 ? checked * 95 / total : 100));
                 continue;
             }
@@ -119,7 +121,8 @@ class UpdateService {
             }
 
             if (needDownload) {
-                emit(listener, new UpdateEvent.StatusChanged("Downloading: " + relPath, null, false));
+                emit(listener, new UpdateEvent.StatusChanged(UpdatePhase.DOWNLOADING,
+                        "Downloading: " + relPath, null, false));
                 log(listener, "         -> Downloading " + relPath + "...");
                 File parent = localFile.getParentFile();
                 if (parent != null && !parent.isDirectory()) parent.mkdirs();
@@ -165,13 +168,15 @@ class UpdateService {
                 }
             }
 
-            emit(listener, new UpdateEvent.StatusChanged("Checked: " + checked + "/" + total, null, false));
+            emit(listener, new UpdateEvent.StatusChanged(UpdatePhase.CHECKING,
+                    "Checked: " + checked + "/" + total, null, false));
             emit(listener, new UpdateEvent.OverallProgressChanged(total > 0 ? checked * 95 / total : 100));
         }
 
         // 3. clean stale files
         log(listener, "Cleaning stale files...");
-        emit(listener, new UpdateEvent.StatusChanged("Cleaning up…",
+        emit(listener, new UpdateEvent.StatusChanged(UpdatePhase.CLEANING,
+                "Cleaning up…",
                 "Removing files that are no longer needed", true));
         fileManager.cleanStaleFiles(manifestFiles, manifest.managedPaths, manifest.excludedPaths);
 
@@ -218,7 +223,8 @@ class UpdateService {
         log(listener, "  [UPDATE] New agent version available!");
         log(listener, "  Remote: " + agentHash);
         log(listener, "  Local:  " + myHash);
-        emit(listener, new UpdateEvent.StatusChanged("Downloading agent update...", null, false));
+        emit(listener, new UpdateEvent.StatusChanged(UpdatePhase.PREPARING,
+                "Downloading agent update...", null, false));
 
         File newJar = new File(myJarPath + ".new");
         if (newJar.exists()) newJar.delete();

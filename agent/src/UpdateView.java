@@ -14,9 +14,11 @@ import java.util.List;
  */
 interface UpdateView {
 
-    /** Status text changed, with an optional secondary description, plus
-     *  whether the overall bar is indeterminate. */
-    void showStatus(String status, String description, boolean indeterminate);
+    /** Status text changed. The {@link UpdatePhase} is carried explicitly by
+     *  the business layer so the view never has to infer it from the text.
+     *  Also carries an optional secondary description and whether the overall
+     *  bar is indeterminate. */
+    void showStatus(UpdatePhase phase, String status, String description, boolean indeterminate);
 
     /** Append one log line to the view. */
     void showLog(String message);

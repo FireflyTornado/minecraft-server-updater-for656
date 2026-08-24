@@ -27,14 +27,17 @@ abstract class UpdateEvent {
     }
 
     /** Status text changed, with an optional secondary description, plus
-     *  whether the overall bar is indeterminate. */
+     *  whether the overall bar is indeterminate. Carries the {@link UpdatePhase}
+     *  explicitly so the UI never has to infer its phase from the status text. */
     static final class StatusChanged extends UpdateEvent {
+        final UpdatePhase phase;
         final String status;
         final String description;   // optional subtitle; may be null
         final boolean indeterminate;
 
-        StatusChanged(String status, String description, boolean indeterminate) {
+        StatusChanged(UpdatePhase phase, String status, String description, boolean indeterminate) {
             super(Type.STATUS_CHANGED);
+            this.phase = phase;
             this.status = status;
             this.description = description;
             this.indeterminate = indeterminate;
