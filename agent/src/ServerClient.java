@@ -88,7 +88,8 @@ class ServerClient {
     }
 
     /** HTTP download with fallback: try each server in order until one succeeds. */
-    boolean httpDownloadWithFallback(String path, File dest) {
+    boolean httpDownloadWithFallback(String path, File dest,
+                                     String displayPath, DownloadProgress.Kind kind) {
         int startIndex = currentServerIndex;
         for (int i = 0; i < serverUrls.size(); i++) {
             int idx = (startIndex + i) % serverUrls.size();
@@ -96,7 +97,7 @@ class ServerClient {
             if (idx != currentServerIndex) {
                 log("Trying server: " + serverUrls.get(idx));
             }
-            if (httpDownload(url, dest)) {
+            if (httpDownload(url, dest, displayPath, kind)) {
                 // Success — switch to this server for subsequent requests
                 if (idx != currentServerIndex) {
                     switchToServer(idx);
@@ -108,7 +109,8 @@ class ServerClient {
         return false;
     }
 
-    private boolean httpDownload(String urlStr, File dest) {
+    private boolean httpDownload(String urlStr, File dest,
+                                 String displayPath, DownloadProgress.Kind kind) {
         try {
             HttpURLConnection conn = (HttpURLConnection) URI.create(urlStr).toURL().openConnection();
             conn.setRequestMethod("GET");
@@ -128,7 +130,7 @@ class ServerClient {
                     downloaded += n;
                     long now = System.currentTimeMillis();
                     if (now - lastEmitAt >= PROGRESS_EMIT_INTERVAL_MS) {
-                        emitProgress(downloaded, total,
+                        emitProgress(displayPath, kind, downloaded, total,
                                 (downloaded - lastBytes) * 1000.0 / (now - lastEmitAt));
                         lastEmitAt = now;
                         lastBytes = downloaded;
@@ -142,18 +144,19 @@ class ServerClient {
             double finalSpeed = (now - lastEmitAt) > 0
                     ? (downloaded - lastBytes) * 1000.0 / (now - lastEmitAt)
                     : 0;
-            emitProgress(downloaded, total, finalSpeed);
+            emitProgress(displayPath, kind, downloaded, total, finalSpeed);
             return true;
         } catch (IOException e) {
             return false;
         }
     }
 
-    /** Emit a download-progress event carrying the speed computed here. */
-    private void emitProgress(long downloaded, long total, double speed) {
+    /** Emit a download-progress event carrying the current object and speed. */
+    private void emitProgress(String displayPath, DownloadProgress.Kind kind,
+                              long downloaded, long total, double speed) {
         if (listener != null) {
             listener.onUpdateEvent(new UpdateEvent.DownloadProgressChanged(
-                    DownloadProgress.active(downloaded, total, speed)));
+                    DownloadProgress.active(displayPath, kind, downloaded, total, speed)));
         }
     }
 

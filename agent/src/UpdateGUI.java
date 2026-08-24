@@ -41,9 +41,13 @@ class UpdateGUI extends JFrame implements UpdateView {
 
     // ── UpdateView ────────────────────────────────────────────────
 
-    /** Update the status text and whether the overall bar is indeterminate. */
+    /**
+     * Update the status text and whether the overall bar is indeterminate.
+     * The optional description is not rendered by the single-label Swing view;
+     * it is reserved for views that can show a title + subtitle.
+     */
     @Override
-    public void showStatus(String status, boolean indeterminate) {
+    public void showStatus(String status, String description, boolean indeterminate) {
         lblStatus.setText(status);
         progressBar.setIndeterminate(indeterminate);
     }

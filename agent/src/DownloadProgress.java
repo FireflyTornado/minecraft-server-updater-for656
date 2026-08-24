@@ -8,25 +8,41 @@
  */
 final class DownloadProgress {
 
+    /** What kind of object is currently being downloaded. */
+    enum Kind {
+        /** A regular managed file from the update manifest. */
+        FILE,
+        /** The updater (agent) self-update. */
+        UPDATER
+    }
+
     final boolean active;
+    /** Current download target (file path or updater name); null when inactive. */
+    final String path;
+    /** Download kind (FILE / UPDATER); null when inactive. */
+    final Kind kind;
     final long downloadedBytes;
     final long totalBytes;
     final double bytesPerSecond;
 
-    DownloadProgress(boolean active, long downloadedBytes, long totalBytes, double bytesPerSecond) {
+    DownloadProgress(boolean active, String path, Kind kind,
+                     long downloadedBytes, long totalBytes, double bytesPerSecond) {
         this.active = active;
+        this.path = path;
+        this.kind = kind;
         this.downloadedBytes = downloadedBytes;
         this.totalBytes = totalBytes;
         this.bytesPerSecond = bytesPerSecond;
     }
 
-    /** Snapshot for an active download. */
-    static DownloadProgress active(long downloaded, long total, double speed) {
-        return new DownloadProgress(true, downloaded, total, speed);
+    /** Snapshot for an active download of the given object. */
+    static DownloadProgress active(String path, Kind kind,
+                                   long downloaded, long total, double speed) {
+        return new DownloadProgress(true, path, kind, downloaded, total, speed);
     }
 
     /** Snapshot meaning "no download in progress". */
     static DownloadProgress inactive() {
-        return new DownloadProgress(false, 0, 0, 0);
+        return new DownloadProgress(false, null, null, 0, 0, 0);
     }
 }

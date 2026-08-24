@@ -60,7 +60,7 @@ class UpdateService {
         log(listener, "Game dir: " + gameDir);
 
         // 1. fetch manifest (with multi-server fallback)
-        emit(listener, new UpdateEvent.StatusChanged("Checking for updates...", true));
+        emit(listener, new UpdateEvent.StatusChanged("Checking for updates...", null, true));
         log(listener, "Fetching manifest...");
         String manifestJson = client.httpGetWithFallback("/api/v2/manifest");
 
@@ -96,7 +96,7 @@ class UpdateService {
             if (localFile == null) {
                 log(listener, "  [REJECT] " + relPath + " (unsafe manifest path)");
                 failed++;
-                emit(listener, new UpdateEvent.StatusChanged("Rejected unsafe path: " + checked + "/" + total, false));
+                emit(listener, new UpdateEvent.StatusChanged("Rejected unsafe path: " + checked + "/" + total, null, false));
                 emit(listener, new UpdateEvent.OverallProgressChanged(total > 0 ? checked * 95 / total : 100));
                 continue;
             }
@@ -119,7 +119,7 @@ class UpdateService {
             }
 
             if (needDownload) {
-                emit(listener, new UpdateEvent.StatusChanged("Downloading: " + relPath, false));
+                emit(listener, new UpdateEvent.StatusChanged("Downloading: " + relPath, null, false));
                 log(listener, "         -> Downloading " + relPath + "...");
                 File parent = localFile.getParentFile();
                 if (parent != null && !parent.isDirectory()) parent.mkdirs();
@@ -128,12 +128,13 @@ class UpdateService {
                 // Report the start of a per-file download; the speed is computed
                 // while streaming and delivered through progress events.
                 emit(listener, new UpdateEvent.DownloadProgressChanged(
-                        DownloadProgress.active(0, entry.size, 0)));
+                        DownloadProgress.active(relPath, DownloadProgress.Kind.FILE, 0, entry.size, 0)));
                 long dlStart = System.currentTimeMillis();
 
                 // URL-encode each path segment for the download URL
                 String encodedPath = ServerClient.encodePath(relPath);
-                boolean ok = client.httpDownloadWithFallback("/api/files/" + encodedPath, tmpFile);
+                boolean ok = client.httpDownloadWithFallback("/api/files/" + encodedPath, tmpFile,
+                        relPath, DownloadProgress.Kind.FILE);
 
                 // Reset per-file progress bar immediately
                 emit(listener, new UpdateEvent.DownloadProgressChanged(DownloadProgress.inactive()));
@@ -164,12 +165,14 @@ class UpdateService {
                 }
             }
 
-            emit(listener, new UpdateEvent.StatusChanged("Checked: " + checked + "/" + total, false));
+            emit(listener, new UpdateEvent.StatusChanged("Checked: " + checked + "/" + total, null, false));
             emit(listener, new UpdateEvent.OverallProgressChanged(total > 0 ? checked * 95 / total : 100));
         }
 
         // 3. clean stale files
         log(listener, "Cleaning stale files...");
+        emit(listener, new UpdateEvent.StatusChanged("Cleaning up…",
+                "Removing files that are no longer needed", true));
         fileManager.cleanStaleFiles(manifestFiles, manifest.managedPaths, manifest.excludedPaths);
 
         return new UpdateResult(updated, failed);
@@ -215,14 +218,16 @@ class UpdateService {
         log(listener, "  [UPDATE] New agent version available!");
         log(listener, "  Remote: " + agentHash);
         log(listener, "  Local:  " + myHash);
-        emit(listener, new UpdateEvent.StatusChanged("Downloading agent update...", false));
+        emit(listener, new UpdateEvent.StatusChanged("Downloading agent update...", null, false));
 
         File newJar = new File(myJarPath + ".new");
         if (newJar.exists()) newJar.delete();
 
+        String agentName = myJar.getName();
         emit(listener, new UpdateEvent.DownloadProgressChanged(
-                DownloadProgress.active(0, agentSize, 0)));
-        boolean ok = client.httpDownloadWithFallback("/api/agent", newJar);
+                DownloadProgress.active(agentName, DownloadProgress.Kind.UPDATER, 0, agentSize, 0)));
+        boolean ok = client.httpDownloadWithFallback("/api/agent", newJar,
+                agentName, DownloadProgress.Kind.UPDATER);
         emit(listener, new UpdateEvent.DownloadProgressChanged(DownloadProgress.inactive()));
 
         if (!ok) {

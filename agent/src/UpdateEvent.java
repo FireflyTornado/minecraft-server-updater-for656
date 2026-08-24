@@ -26,14 +26,17 @@ abstract class UpdateEvent {
         this.type = type;
     }
 
-    /** Status text changed, plus whether the overall bar is indeterminate. */
+    /** Status text changed, with an optional secondary description, plus
+     *  whether the overall bar is indeterminate. */
     static final class StatusChanged extends UpdateEvent {
         final String status;
+        final String description;   // optional subtitle; may be null
         final boolean indeterminate;
 
-        StatusChanged(String status, boolean indeterminate) {
+        StatusChanged(String status, String description, boolean indeterminate) {
             super(Type.STATUS_CHANGED);
             this.status = status;
+            this.description = description;
             this.indeterminate = indeterminate;
         }
     }

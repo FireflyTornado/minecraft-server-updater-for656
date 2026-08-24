@@ -14,8 +14,9 @@ import java.util.List;
  */
 interface UpdateView {
 
-    /** Status text changed, plus whether the overall bar is indeterminate. */
-    void showStatus(String status, boolean indeterminate);
+    /** Status text changed, with an optional secondary description, plus
+     *  whether the overall bar is indeterminate. */
+    void showStatus(String status, String description, boolean indeterminate);
 
     /** Append one log line to the view. */
     void showLog(String message);

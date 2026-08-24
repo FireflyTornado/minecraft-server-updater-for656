@@ -71,7 +71,7 @@ final class UpdateController implements UpdateListener, UpdateViewListener {
         switch (event.type) {
             case STATUS_CHANGED: {
                 UpdateEvent.StatusChanged e = (UpdateEvent.StatusChanged) event;
-                view.showStatus(e.status, e.indeterminate);
+                view.showStatus(e.status, e.description, e.indeterminate);
                 break;
             }
             case OVERALL_PROGRESS_CHANGED:
