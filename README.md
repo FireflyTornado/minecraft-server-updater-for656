@@ -85,6 +85,7 @@ Configuration is resolved in this order (normal mode):
 | `mc-update.server` | `http://localhost:25565` | Server URL(s) — comma-separated for **multi-source fallback** |
 | `mc-update.game-dir` | `.` | Minecraft directory |
 | `mc-update.debug` | `false` | Keep GUI open after sync |
+| `mc-update.ui` | `swing` | UI toolkit: `swing` (default) or `javafx` (experimental parallel view) |
 
 **Recommended: `mc-update.properties`** (written by setup script):
 ```properties
@@ -105,6 +106,34 @@ server=http://cdn1.example.com:25565,http://cdn2.example.com:8443
 ```
 -javaagent:UpdateAgent.jar=admin=true,server=http://override:25565
 ```
+
+### JavaFX UI (experimental)
+
+The update window can also be rendered with JavaFX instead of Swing. This is a
+functionally-correct parallel implementation of the same toolkit-agnostic
+`UpdateView` contract, living in `agent/javafx/`. It is not the default yet.
+
+To use it:
+
+1. **Build** the core JAR with the JavaFX view:
+   ```bash
+   cd agent
+   ./build.sh --javafx        # or build.bat --javafx on Windows
+   ```
+   This needs the JavaFX 21 runtime jars (`javafx-base`, `javafx-graphics`,
+   `javafx-controls`, win classifier) in `agent/lib/javafx/` — the build prints
+   the download location if they are missing.
+2. **Switch** the entry layer to JavaFX with `mc-update.ui=javafx`, resolved
+   with the same precedence as the other `mc-update.*` properties (config file
+   > agent args > system properties > default). Example:
+   ```
+   mc-update.ui=javafx
+   ```
+   The default `swing` keeps using the existing Swing view.
+3. **Run**: the JavaFX jars must also be on the client JVM's classpath (e.g.
+   add `agent/lib/javafx/*` to the launch JVM arguments alongside
+   `-javaagent`). If the JavaFX implementation is absent or cannot start,
+   `UpdateAgent` logs a warning and falls back to the Swing view.
 
 ### Selective Sync (`update-config.json`)
 
@@ -153,7 +182,11 @@ Paths ending with `/` match directories recursively; bare names match exact file
     │   ├── DownloadProgress.java   # Per-file download progress snapshot (worker ↔ UI)
     │   ├── JsonParser.java         # Lightweight JSON parsing helpers (no external deps)
     │   └── FormatUtil.java         # Formatting helpers (e.g. download speed)
-    ├── build.sh / build.bat    # Compile + package both JARs
+    ├── javafx/                 # JavaFX UI — parallel impl of UpdateView (built only with --javafx)
+    │   ├── JavaFxEntryPoint.java    # JavaFX composition root (reached reflectively from UpdateAgent)
+    │   ├── JavaFxUiDispatcher.java  # UiDispatcher backed by Platform.runLater
+    │   └── JavaFxUpdateView.java    # JavaFX view implementing UpdateView (six phases)
+    ├── build.sh / build.bat    # Compile + package both JARs (--javafx adds the JavaFX view)
     └── setup-agent.sh / setup-agent.bat  # Write config + append -javaagent to JVM args
 ```
 

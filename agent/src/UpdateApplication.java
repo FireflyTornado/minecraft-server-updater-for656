@@ -37,8 +37,10 @@ class UpdateApplication {
         controller.start();
     }
 
-    /** Parse comma-separated server URLs, trimming whitespace from each. */
-    private static List<String> parseServerList(String raw) {
+    /** Parse comma-separated server URLs, trimming whitespace from each.
+     *  Package-private so the JavaFX composition root ({@link JavaFxEntryPoint})
+     *  reuses the same parsing. */
+    static List<String> parseServerList(String raw) {
         List<String> list = new ArrayList<>();
         if (raw == null || raw.trim().isEmpty()) return list;
         for (String token : raw.split(",")) {

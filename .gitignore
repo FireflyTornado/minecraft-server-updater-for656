@@ -1,0 +1,8 @@
+# Build outputs
+agent/UpdateAgent.jar
+agent/UpdateAgent_core.jar
+agent/build/
+
+# JavaFX runtime jars downloaded for the optional --javafx build
+# (javafx-base/graphics/controls). See build.sh / build.bat.
+agent/lib/javafx/

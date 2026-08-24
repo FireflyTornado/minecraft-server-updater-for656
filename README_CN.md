@@ -85,6 +85,7 @@ cd agent
 | `mc-update.server` | `http://localhost:25565` | 服务器地址 — 支持**逗号分隔多源**，自动故障转移 |
 | `mc-update.game-dir` | `.` | Minecraft 目录 |
 | `mc-update.debug` | `false` | 同步完成后保持窗口打开 |
+| `mc-update.ui` | `swing` | UI 工具包：`swing`（默认）或 `javafx`（实验性的并行视图） |
 
 **推荐方式：`mc-update.properties`**（由安装脚本写入）：
 ```properties
@@ -105,6 +106,31 @@ server=http://cdn1.example.com:25565,http://cdn2.example.com:8443
 ```
 -javaagent:UpdateAgent.jar=admin=true,server=http://override:25565
 ```
+
+### JavaFX 界面（实验性）
+
+更新窗口也可以使用 JavaFX 而非 Swing 渲染。这是对同一个与工具包无关的
+`UpdateView` 契约的功能正确的并行实现，位于 `agent/javafx/`。目前还不是默认实现。
+
+使用方式：
+
+1. **构建**带 JavaFX 视图的核心 JAR：
+   ```bash
+   cd agent
+   ./build.sh --javafx        # Windows 用 build.bat --javafx
+   ```
+   这需要 JavaFX 21 运行时 jar（`javafx-base`、`javafx-graphics`、
+   `javafx-controls`，win 分类器）放在 `agent/lib/javafx/` 中 —— 若缺失，
+   构建脚本会打印下载地址。
+2. **切换**入口层：将 `mc-update.ui=javafx`，解析优先级与其它
+   `mc-update.*` 属性一致（配置文件 > agent 参数 > 系统属性 > 默认值）。示例：
+   ```
+   mc-update.ui=javafx
+   ```
+   默认值 `swing` 继续使用现有的 Swing 视图。
+3. **运行**：JavaFX jar 还必须出现在客户端 JVM 的 classpath 上（例如在
+   `-javaagent` 旁的启动 JVM 参数中加上 `agent/lib/javafx/*`）。如果 JavaFX
+   实现缺失或无法启动，`UpdateAgent` 会记录警告并回退到 Swing 视图。
 
 ### 选择性同步 (`update-config.json`)
 
@@ -153,7 +179,11 @@ server=http://cdn1.example.com:25565,http://cdn2.example.com:8443
     │   ├── DownloadProgress.java   # 单文件下载进度快照（工作线程 ↔ 界面）
     │   ├── JsonParser.java         # 轻量 JSON 解析辅助（无外部依赖）
     │   └── FormatUtil.java         # 格式化辅助（如下载速度）
-    ├── build.sh / build.bat    # 编译并打包两个 JAR
+    ├── javafx/                 # JavaFX 界面 — UpdateView 的并行实现（仅在 --javafx 构建时编译）
+    │   ├── JavaFxEntryPoint.java    # JavaFX 组合根（由 UpdateAgent 反射调用）
+    │   ├── JavaFxUiDispatcher.java  # 基于 Platform.runLater 的 UiDispatcher
+    │   └── JavaFxUpdateView.java    # 实现 UpdateView 的 JavaFX 视图（六种状态）
+    ├── build.sh / build.bat    # 编译并打包两个 JAR（--javafx 追加 JavaFX 视图）
     └── setup-agent.sh / setup-agent.bat  # 写入配置并追加 -javaagent 到 JVM 参数
 ```
 

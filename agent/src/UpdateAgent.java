@@ -9,6 +9,7 @@
  * System properties (or agent args):
  *   -Dmc-update.server=http://192.168.1.100:25565
  *   -Dmc-update.game-dir=C:\\path\\to\\.minecraft
+ *   -Dmc-update.ui=javafx       (optional: "swing" default, or "javafx")
  *
  * Compile:
  *   javac -d build src/*.java
@@ -30,6 +31,7 @@ public class UpdateAgent {
     private static final String PROP_SERVER  = "mc-update.server";
     private static final String PROP_GAME_DIR = "mc-update.game-dir";
     private static final String PROP_DEBUG    = "mc-update.debug";
+    private static final String PROP_UI       = "mc-update.ui";
     private static final String CONFIG_FILE   = "mc-update.properties";
     private static final String DEFAULT_SERVER = "http://localhost:25565";
 
@@ -56,6 +58,7 @@ public class UpdateAgent {
         //    Admin:   agent args  > -D system props > file config  > defaults (original)
         String server;
         boolean debug;
+        String ui;
 
         if (admin) {
             server = coalesce(
@@ -71,6 +74,12 @@ public class UpdateAgent {
                 "false"
             );
             debug = "true".equalsIgnoreCase(debugStr) || "1".equals(debugStr);
+            ui = coalesce(
+                agentArgs.get("ui"),
+                System.getProperty(PROP_UI),
+                fileConfig.getProperty("ui"),
+                "swing"
+            );
         } else {
             server = coalesce(
                 fileConfig.getProperty("server"),
@@ -85,6 +94,12 @@ public class UpdateAgent {
                 "false"
             );
             debug = "true".equalsIgnoreCase(debugStr) || "1".equals(debugStr);
+            ui = coalesce(
+                fileConfig.getProperty("ui"),
+                agentArgs.get("ui"),
+                System.getProperty(PROP_UI),
+                "swing"
+            );
         }
 
         System.setProperty(PROP_SERVER, server);
@@ -92,15 +107,43 @@ public class UpdateAgent {
             System.setProperty(PROP_DEBUG, "true");
         }
 
-        // Block premain until update check finishes, then allow Minecraft to start
+        // Block premain until update check finishes, then allow Minecraft to start.
+        // UI toolkit is chosen by mc-update.ui: "javafx" uses the JavaFX view,
+        // anything else (default) uses the Swing view.
         CountDownLatch latch = new CountDownLatch(1);
-        UpdateApplication app = new UpdateApplication(gameDir, server, debug, latch);
-        SwingUtilities.invokeLater(app::start);
+        if ("javafx".equalsIgnoreCase(ui)) {
+            startJavaFxFlow(gameDir, server, debug, latch);
+        } else {
+            UpdateApplication app = new UpdateApplication(gameDir, server, debug, latch);
+            SwingUtilities.invokeLater(app::start);
+        }
 
         try {
             latch.await();  // block until update check completes
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
+        }
+    }
+
+    /**
+     * Start the update flow with the JavaFX view. The JavaFX composition root
+     * ({@code JavaFxEntryPoint}) is loaded by name so the core JAR still
+     * compiles and runs without the JavaFX runtime on the classpath; if the
+     * JavaFX implementation is missing or the runtime cannot be started, fall
+     * back to the Swing view.
+     */
+    private static void startJavaFxFlow(String gameDir, String server,
+                                        boolean debug, CountDownLatch latch) {
+        try {
+            Class<?> entry = Class.forName("JavaFxEntryPoint");
+            entry.getMethod("launch", String.class, String.class,
+                            boolean.class, CountDownLatch.class)
+                 .invoke(null, gameDir, server, debug, latch);
+        } catch (Exception | LinkageError e) {
+            e.printStackTrace();
+            System.err.println("[UpdateAgent] JavaFX view unavailable, falling back to Swing.");
+            UpdateApplication app = new UpdateApplication(gameDir, server, debug, latch);
+            SwingUtilities.invokeLater(app::start);
         }
     }
 
