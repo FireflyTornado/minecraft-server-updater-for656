@@ -318,6 +318,14 @@
     -fx-padding: 0;
 }
 
+/* Persistent bottom attribution line — small, muted, centred. It sits below
+   the Details pane (and the debug footer when present) and never changes with
+   the phase. */
+.footer-copyright {
+    -fx-font-size: 11px;
+    -fx-text-fill: #6B7681;
+}
+
 /* Destructive action inside the Quit-update Alert. */
 .danger-button {
     -fx-background-color: #E05252;

@@ -106,6 +106,11 @@ class JavaFxUpdateView implements UpdateView {
     private static final double HEADER_FADE_MS = 130;       // spec 100–150ms
     private static final double ENTRANCE_SCALE_FROM = 0.94; // spec 0.94 → 1.0
 
+    // Persistent bottom attribution line (styled via .footer-copyright in
+    // ui.css). Pure presentation — it never affects the update flow.
+    private static final String FOOTER_COPYRIGHT =
+            "Developed by Zack88604 · MIT License · UI redesign by Eternity_Riguru";
+
     // Status-illustration resources (JAR-relative), bundled into the core JAR
     // from agent/images/ and preloaded into the statusImages cache at startup.
     private static final String IMG_PREPARING = "/images/preparing.png";
@@ -141,6 +146,9 @@ class JavaFxUpdateView implements UpdateView {
 
     // Debug close button
     private final Button btnClose = new Button("Close");
+
+    // Persistent bottom copyright line (always the last row of the root).
+    private final Label lblFooter = new Label();
 
     // Reserved status-illustration slot: a fixed 64×64 StackPane holding two
     // stacked ImageViews so a phase switch is a real cross-fade (the new art
@@ -931,6 +939,21 @@ class JavaFxUpdateView implements UpdateView {
             bottom.setAlignment(Pos.CENTER_RIGHT);
             root.getChildren().addAll(footerLine, bottom);
         }
+
+        // Persistent bottom copyright line — centred and muted. Added after the
+        // debug footer so it is always the last row; the content-driven window
+        // sizing (applyWindowHeight) already accounts for its extra height.
+        // The label grows (VBox.setVgrow ALWAYS) to absorb the leftover height in
+        // the short collapsed states, so its text is pinned to the bottom edge of
+        // the window instead of floating above dead space; its pref height is
+        // unchanged, so it never inflates the content-driven window size.
+        lblFooter.getStyleClass().add("footer-copyright");
+        lblFooter.setMaxWidth(Double.MAX_VALUE);
+        lblFooter.setMaxHeight(Double.MAX_VALUE);
+        lblFooter.setAlignment(Pos.BOTTOM_CENTER);
+        lblFooter.setText(FOOTER_COPYRIGHT);
+        VBox.setVgrow(lblFooter, Priority.ALWAYS);
+        root.getChildren().add(lblFooter);
 
         // Apply the shared visual system (ui.css) — normal and debug alike.
         // Short by default; the window grows when Details expands (debug mode
