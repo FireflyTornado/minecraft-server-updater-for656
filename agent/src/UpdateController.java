@@ -30,6 +30,10 @@ final class UpdateController implements UpdateListener, UpdateViewListener {
     private final CountDownLatch latch;
     private final boolean debug;
 
+    /** True once the flow has ended in failure — the window then stays open and
+     *  only closes when the user closes it (exiting without launching Minecraft). */
+    private volatile boolean failed;
+
     private volatile UpdateView view;
 
     UpdateController(UpdateService service, UiDispatcher dispatcher,
@@ -114,11 +118,20 @@ final class UpdateController implements UpdateListener, UpdateViewListener {
 
     @Override
     public void onWindowClosed() {
+        if (failed) {
+            // The update failed — never launch Minecraft; close the JVM instead.
+            System.exit(1);
+            return;
+        }
         latch.countDown();
     }
 
     @Override
     public void onCloseRequested() {
+        if (failed) {
+            System.exit(1);
+            return;
+        }
         latch.countDown();
         dispatcher.invoke(view::close);
     }
@@ -126,15 +139,18 @@ final class UpdateController implements UpdateListener, UpdateViewListener {
     // ── Application flow ────────────────────────────────────────────
 
     /**
-     * The update completed. Failed files kill the process; otherwise release the
-     * latch so Minecraft can start. All delays and window management live here,
-     * not in the view. Runs on the UI thread.
+     * The update completed. A failed update stays open — the window only closes
+     * when the user closes it, exiting the JVM (code 1) so Minecraft never
+     * launches with broken files. A successful run releases the latch so
+     * Minecraft can start, closing the window after a short delay (or, in debug,
+     * leaving it open for inspection). All delays and window management live
+     * here, not in the view. Runs on the UI thread.
      */
     private void onUpdateFinished(UpdateResult result) {
         if (result.failed > 0) {
+            failed = true;
             view.showLog("[FATAL] " + result.failed
-                    + " file(s) failed to update, killing Minecraft process...");
-            delayThen(2000, () -> System.exit(1));
+                    + " file(s) failed to update. Minecraft will not start; close the window to exit.");
         } else if (debug) {
             // Release now; the window stays open for inspection.
             latch.countDown();
@@ -148,14 +164,14 @@ final class UpdateController implements UpdateListener, UpdateViewListener {
     }
 
     /**
-     * The update threw an exception — print the stack trace and terminate the
-     * JVM after a short grace period so the error stays visible. Runs on the
-     * UI thread.
+     * The update threw an exception — print the stack trace and stay open so the
+     * error can be read. The window closes only when the user closes it, exiting
+     * the JVM (code 1) without launching Minecraft. Runs on the UI thread.
      */
     private void onUpdateError(Throwable cause) {
         cause.printStackTrace();
-        view.showLog("[FATAL] Killing Minecraft process...");
-        delayThen(1000, () -> System.exit(1));
+        failed = true;
+        view.showLog("[FATAL] Update failed. Minecraft will not start; close the window to exit.");
     }
 
     /** Run an action once after a delay on a daemon thread. No Swing involved. */

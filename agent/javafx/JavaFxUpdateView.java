@@ -375,6 +375,10 @@ class JavaFxUpdateView implements UpdateView {
         lblStatus.setText("Update failed");
         lblDescription.setText(msg);
         showLog("[ERROR] " + msg);
+        if (debug) {
+            setCloseEnabled(true);
+            showLog("[DEBUG] Update check failed. Window stays open for inspection.");
+        }
     }
 
     /** Enable or disable the debug close button. */
@@ -461,11 +465,13 @@ class JavaFxUpdateView implements UpdateView {
                 // (e.g. a previous 100%), expands Details and shows a few
                 // more log rows for the failure context. The row count is
                 // raised before expanding so the expansion-driven resize
-                // sees the final content height.
+                // sees the final content height. The bar's row stays managed
+                // (only its visibility is toggled) so the Details pane below
+                // keeps a fixed position and never jumps as the bar appears
+                // or disappears.
                 overallBar.setProgress(0);
                 lblOverallPct.setText("");
                 overallArea.setVisible(false);
-                overallArea.setManaged(false);
                 logArea.setPrefRowCount(10);
                 detailsPane.setExpanded(true);
                 root.getStyleClass().add("error-state");
@@ -482,33 +488,32 @@ class JavaFxUpdateView implements UpdateView {
         applyWindowHeight();
     }
 
-    /** Hide the overall percentage label, clearing any stale text. */
+    /** Hide the overall percentage label, clearing any stale text. The label
+     *  stays managed (only its width slot collapses) so the overall row keeps
+     *  its height — the 12px label is taller than the 8px bar, so un-managing
+     *  it would shrink the row and shift the Details pane below. */
     private void clearOverallPercent() {
         lblOverallPct.setText("");
         lblOverallPct.setVisible(false);
-        lblOverallPct.setManaged(false);
+        lblOverallPct.setPrefWidth(0);
     }
 
     /** Show the overall percentage label next to the bar. */
     private void showOverallPercent() {
         lblOverallPct.setVisible(true);
-        lblOverallPct.setManaged(true);
+        lblOverallPct.setPrefWidth(44);
     }
 
-    /** Reveal the current-file area; grows the window only on the show/hide flip. */
+    /** Reveal the current-file area. Its row is always reserved in the layout,
+     *  so showing it changes no heights and the window never resizes on the flip. */
     private void showDownloadArea() {
-        boolean wasVisible = dlArea.isVisible();
         dlArea.setVisible(true);
-        dlArea.setManaged(true);
-        if (!wasVisible) {
-            applyWindowHeight();
-        }
     }
 
-    /** Hide and clear the current-file area. */
+    /** Hide and clear the current-file area. The row stays managed so the
+     *  Details pane below keeps a fixed position. */
     private void hideDownloadArea() {
         dlArea.setVisible(false);
-        dlArea.setManaged(false);
         lblDlFile.setText("");
         dlBar.setProgress(0);
         lblDlSpeed.setText("");
@@ -903,8 +908,9 @@ class JavaFxUpdateView implements UpdateView {
         dlBar.getStyleClass().add("file-progress");
         lblDlSpeed.getStyleClass().add("download-speed");
         dlArea.getChildren().addAll(lblDlFile, dlBar, lblDlSpeed);
+        // Starts hidden but keeps its row in the layout (managed stays true):
+        // reserving the space pins the Details pane below it to one position.
         dlArea.setVisible(false);
-        dlArea.setManaged(false);
 
         // Details area: Server URL, Game Directory and the full log. Collapsed
         // in normal mode, expanded in debug mode (and on error).

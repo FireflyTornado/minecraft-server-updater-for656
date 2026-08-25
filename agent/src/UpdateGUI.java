@@ -128,6 +128,12 @@ class UpdateGUI extends JFrame implements UpdateView {
         resetDownloadProgressBar();
         appendLog("[ERROR] " + message);
         JOptionPane.showMessageDialog(this, message, "Update Error", JOptionPane.ERROR_MESSAGE);
+        // The error window stays open until the user closes it — make the debug
+        // Close button usable once the modal dialog is dismissed.
+        if (debug) {
+            setCloseEnabled(true);
+            appendLog("[DEBUG] Update check failed. Window stays open for inspection.");
+        }
     }
 
     /** Enable or disable the close button (used in debug mode). */
