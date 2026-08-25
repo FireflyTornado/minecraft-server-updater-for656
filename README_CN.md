@@ -70,6 +70,8 @@ cd agent
 | `PORT` | `25565` | HTTP 端口 |
 | `GENERATE_TOKEN` | *(空)* | 保护 `/api/generate` 接口 |
 | `DEBUG` | `false` | Flask 调试模式 |
+| `HOST` | `0.0.0.0` | 监听地址 |
+| `DATA_DIR` | `/data` | 数据根目录（含 `files/`、`agent/`、`logs/`、`manifest.json`） |
 
 ### Agent（JVM 属性）
 
@@ -193,8 +195,7 @@ runtime。
 
 ### 截图
 
-每一种界面状态都保存在 [`screenshots/`](screenshots/) 中 — 由开发工具
-`agent/devtools/UiScreenshotHarness.java` 离屏渲染生成：
+每一种界面状态都保存在 [`screenshots/`](screenshots/) 中 — 离屏渲染生成：
 
 | 文件 | 状态 |
 |------|------|
@@ -210,22 +211,6 @@ runtime。
 | `10_debug_close_enabled.png` | 调试窗口，流程完成后关闭按钮可用 |
 | `11_quit_alert.png` | “Quit update?” 退出确认弹窗 |
 
-> **重新生成占位插图与截图**（在 `agent/` 目录下）：
-> ```bash
-> # 1. 重新生成占位状态插图（写入 agent/images/）
-> javac -encoding UTF-8 -d build-harness devtools/GenImages.java
-> java -cp build-harness GenImages
->
-> # 2. 重新渲染每种界面状态到 screenshots/*.png
-> javac -encoding UTF-8 --module-path lib/javafx --add-modules javafx.controls,javafx.swing \
->       -cp "lib/javafx/*" -d build-harness src/*.java javafx/*.java devtools/*.java
-> cp javafx/ui.css build-harness/
-> java --module-path lib/javafx --add-modules javafx.controls,javafx.swing \
->       -cp "build-harness;.;lib/javafx/*" UiScreenshotHarness
-> ```
-> 类路径里的 `.`（即 `agent/` 目录）让视图能解析 `agent/images/` 下的
-> `/images/*.png`；正式构建改为从 JAR 内加载。
-
 ## 项目结构
 
 ```
@@ -233,7 +218,7 @@ runtime。
 ├── LICENSE
 ├── README.md
 ├── README_CN.md
-├── screenshots/              # 每种界面状态的截图，由开发工具生成
+├── screenshots/              # 每种界面状态的截图
 ├── server/
 │   ├── app.py                  # Flask API（清单、文件、Agent、配置、健康检查）
 │   ├── entrypoint.sh           # 容器入口
@@ -277,14 +262,6 @@ runtime。
     │   ├── JavaFxUpdateView.java    # 实现 UpdateView 的 JavaFX 视图（六种状态 + 状态插图槽位，由 /ui.css 提供样式）
     │   ├── ui.css                   # 窗口与对话框共用的深色扁平视觉系统
     │   └── javafx-runtime-spec.json # 内置纯客户端 spec：本地 runtime 缓存的版本/平台/artifact SHA-256
-    ├── devtools/               # 仅开发用工具 — 不打包进 Agent JAR
-    │   ├── UiScreenshotHarness.java  # 离屏渲染每种界面状态到 screenshots/*.png
-    │   ├── GenImages.java            # 生成占位状态插图到 images/
-    │   ├── ImageCheck.java           # 校验生成的插图（边界、图标、透明）
-    │   ├── ScreenshotProbe.java      # 校验每张截图是否显示了对应阶段插图
-    │   ├── PhaseSwitchTest.java      # JavaFX 视图快速连续阶段切换测试
-    │   ├── WindowBoundsCheck.java    # 校验 Details 展开时窗口居中/不越界
-    │   └── VerifyLocalProbe.java     # 覆盖 MISSING/READY/CORRUPTED 校验 JavaFxRuntimeManager.verifyLocal()
     ├── lib/javafx/             # JavaFX 21 运行时 jar（javafx-base/-graphics/-controls/-swing，win）— 编译期依赖 + 预置 runtime 来源
     ├── build.sh / build.bat    # 编译并打包两个 JAR（始终包含 JavaFX 视图、ui.css、images/、内置 spec）
     ├── make-distro.sh          # 可选发行包；--stage-runtime 预置 javafx-runtime/<ver>/ + runtime.json（不写 policy.json）
