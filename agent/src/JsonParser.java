@@ -38,6 +38,17 @@ final class JsonParser {
         return defaultVal;
     }
 
+    /** Extract a floating-point value for a key (unquoted number). */
+    static double getDouble(String json, String key, double defaultVal) {
+        Pattern p = Pattern.compile("\"" + key + "\"\\s*:\\s*(-?\\d+(?:\\.\\d+)?)");
+        Matcher m = p.matcher(json);
+        if (m.find()) {
+            try { return Double.parseDouble(m.group(1)); }
+            catch (NumberFormatException ignored) {}
+        }
+        return defaultVal;
+    }
+
     /** Extract a JSON object value for a key (e.g. "agent": {...}) */
     static String getObject(String json, String key) {
         int k = json.indexOf("\"" + key + "\"");

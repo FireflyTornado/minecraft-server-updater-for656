@@ -85,7 +85,7 @@ cd agent
 | `mc-update.server` | `http://localhost:25565` | 服务器地址 — 支持**逗号分隔多源**，自动故障转移 |
 | `mc-update.game-dir` | `.` | Minecraft 目录 |
 | `mc-update.debug` | `false` | 同步完成后保持窗口打开 |
-| `mc-update.ui` | `swing` | UI 工具包：`swing`（默认）或 `javafx`（实验性的并行视图） |
+| `mc-update.ui` | `auto` | UI 工具包：`auto`（默认）、`javafx` 或 `swing`。`auto` 在本地 runtime 就绪时使用 JavaFX helper，否则回退 Swing |
 
 **推荐方式：`mc-update.properties`**（由安装脚本写入）：
 ```properties
@@ -145,30 +145,38 @@ server=http://cdn1.example.com:25565,http://cdn2.example.com:8443
 - **Details（可折叠）** — 服务器地址、游戏目录与完整日志；默认折叠，出错与调试模式下自动展开。
 - **关闭窗口** — 更新进行中关闭会弹窗确认（“Quit update?”）；成功/失败的终态阶段直接关闭。调试模式额外提供一个 Close 按钮，流程允许前保持禁用。
 
-### JavaFX 视图（实验性）
+### JavaFX 视图（独立 helper JVM）
 
-更新窗口也可以使用 JavaFX 而非 Swing 渲染。这是对同一个与工具包无关的
-`UpdateView` 契约的功能正确的并行实现，位于 `agent/javafx/`。目前还不是默认实现。
+更新窗口也可以使用 JavaFX 而非 Swing 渲染。JavaFX 视图位于 `agent/javafx/`，
+实现与工具包无关的同一个 `UpdateView` 契约。它运行在**独立的 helper JVM** 中
+（`--module-path javafx-runtime/<version> --add-modules javafx.controls -cp
+UpdateAgent_core.jar JavaFxEntryPoint`）；Minecraft JVM 永不加载 `javafx.*`。
+两个进程通过 stdin/stdout 上的 JSONL 通信（`EventCodec`）。helper 无法启动、
+runtime 缺失或损坏时，agent 静默改用 Swing 视图，Minecraft 启动永不受影响。
+
+**runtime 来源完全在客户端。** 每个发行版本把
+`/javafx-runtime-spec.json`（版本、平台、文件名、大小、SHA-256）内置进核心
+JAR。agent jar 旁的 `javafx-runtime/` 只是**可自动重建的本地缓存**：干净机器
+首次启动用 Swing，后台 `javafx-runtime-worker` 从 Maven Central
+（`org/openjfx/...`）下载缺失/损坏的 jar，校验 SHA-256 后原子替换；
+JavaFX 视图从**下次**启动开始使用。服务端 manifest/API 完全不参与 JavaFX
+runtime。
 
 使用方式：
 
-1. **构建**带 JavaFX 视图的核心 JAR：
+1. **构建**核心 JAR（JavaFX 视图始终编译进去）：
    ```bash
    cd agent
-   ./build.sh --javafx        # Windows 用 build.bat --javafx
+   ./build.sh        # Windows 用 build.bat
    ```
-   这需要 JavaFX 21 运行时 jar（`javafx-base`、`javafx-graphics`、
-   `javafx-controls`，win 分类器）放在 `agent/lib/javafx/` 中 —— 若缺失，
-   构建脚本会打印下载地址。
-2. **切换**入口层：将 `mc-update.ui=javafx`，解析优先级与其它
-   `mc-update.*` 属性一致（配置文件 > agent 参数 > 系统属性 > 默认值）。示例：
-   ```
-   mc-update.ui=javafx
-   ```
-   默认值 `swing` 继续使用现有的 Swing 视图。
-3. **运行**：JavaFX jar 还必须出现在客户端 JVM 的 classpath 上（例如在
-   `-javaagent` 旁的启动 JVM 参数中加上 `agent/lib/javafx/*`）。如果 JavaFX
-   实现缺失或无法启动，`UpdateAgent` 会记录警告并回退到 Swing 视图。
+   JavaFX 21 运行时 jar（`javafx-base`、`javafx-graphics`、
+   `javafx-controls`、`javafx-swing`，win 分类器）缺失时，构建脚本会自动从
+   Maven Central 下载到 `agent/lib/javafx/`。这些 jar 是编译期依赖，也是
+   可选预置 runtime（`./make-distro.sh --stage-runtime`）的来源。
+2. **运行**：默认 `mc-update.ui=auto` 在 `javafx-runtime/` READY（与内置 spec
+   一致）且能找到 helper JVM 的 `java` 时使用 JavaFX，否则回退 Swing。
+   `mc-update.ui=javafx` / `mc-update.ui=swing` 可强制指定；
+   `remove-javafx=true` 会删除本地 runtime 缓存并强制 Swing。
 
 #### 状态插图与布局
 
@@ -176,7 +184,7 @@ server=http://cdn1.example.com:25565,http://cdn2.example.com:8443
 每个阶段一张插图（`preparing` / `checking` / `downloading` / `cleaning` /
 `success` / `error`），PREPARING 的自更新子状态另有独立的 `updater` 插图。
 图片作为 JAR 资源 `/images/*.png` 加载，源文件在 `agent/images/` 下，由
-`--javafx` 构建打包进核心 JAR；正式插图到位前作为占位图。**图片缺失或损坏时
+构建脚本打包进核心 JAR；正式插图到位前作为占位图。**图片缺失或损坏时
 槽位自动隐藏**，不影响布局与更新流程。
 
 窗口高度为**内容驱动**：Details 展开（出错或调试模式）时窗口按内容撑开，而
@@ -233,7 +241,7 @@ server=http://cdn1.example.com:25565,http://cdn2.example.com:8443
 │   └── requirements.txt
 └── agent/
     ├── META-INF/MANIFEST.MF   # Premain-Class: Launcher
-    ├── src/                   # 业务层 + Swing 视图（始终编译）
+    ├── src/                   # 业务层 + Swing 视图 + JavaFX helper-JVM 桥（始终编译）
     │   ├── Launcher.java           # -javaagent 入口；用 .new 替换核心 JAR 并动态加载
     │   ├── UpdateAgent.java        # 核心入口（premain）：配置解析 + 更新流程
     │   ├── UpdateApplication.java  # 组合根：串联服务、视图与控制器；不持有任何流程决策
@@ -246,8 +254,14 @@ server=http://cdn1.example.com:25565,http://cdn2.example.com:8443
     │   ├── UpdateViewListener.java # 视图 → 控制器的用户操作回调（关闭窗口 / 调试关闭按钮）
     │   ├── UpdateGUI.java          # Swing 界面（状态、进度、日志、速度）；实现 UpdateView
     │   ├── UiModel.java            # 传给界面的不可变展示数据
+    │   ├── UiSnapshot.java         # 传给视图的界面状态快照（含 Swing 回退路径）
+    │   ├── ViewApplier.java        # 将 UpdateEvent 应用到当前视图状态
+    │   ├── RemoteUpdateView.java   # 经 JSONL 代理到 JavaFX helper JVM 的 agent 侧 UpdateView
     │   ├── UiDispatcher.java       # 对 UI 工具包「在 UI 线程执行」的抽象
     │   ├── SwingUiDispatcher.java  # 基于 Swing EDT 的 UiDispatcher 实现
+    │   ├── DirectUiDispatcher.java # 在 helper JVM 内直接运行于 JavaFX 平台线程的 UiDispatcher
+    │   ├── JavaFxHelperProcess.java    # 启动/管理 JavaFX helper JVM 子进程
+    │   ├── JavaFxRuntimeManager.java   # 依据内置 spec 校验/下载本地 javafx-runtime/ 缓存
     │   ├── UpdateResult.java       # 更新结果：updated / failed 计数
     │   ├── ServerClient.java       # 支持多源故障转移的 HTTP 客户端
     │   ├── FileManager.java        # 路径安全检查、SHA-256、原子替换、过期文件清理
@@ -255,20 +269,25 @@ server=http://cdn1.example.com:25565,http://cdn2.example.com:8443
     │   ├── FileEntry.java          # 清单中的单个文件条目（路径、哈希、大小）
     │   ├── DownloadProgress.java   # 单文件下载进度快照（工作线程 ↔ 界面）
     │   ├── JsonParser.java         # 轻量 JSON 解析辅助（无外部依赖）
+    │   ├── EventCodec.java         # Minecraft JVM 与 helper JVM 之间的 JSONL IPC 编解码
     │   └── FormatUtil.java         # 格式化辅助（如下载速度）
     ├── images/                 # JavaFX 视图的状态插图（每阶段一张）；打包进核心 JAR
-    ├── javafx/                 # JavaFX 视图 — UpdateView 的并行实现（仅在 --javafx 构建时编译）
-    │   ├── JavaFxEntryPoint.java    # JavaFX 组合根（由 UpdateAgent 反射调用）
-    │   ├── JavaFxUiDispatcher.java  # 基于 Platform.runLater 的 UiDispatcher
+    ├── javafx/                 # JavaFX 视图 — UpdateView 的并行实现，始终编译；运行于 helper JVM
+    │   ├── JavaFxEntryPoint.java    # helper-JVM 入口：读 stdin JSONL、渲染视图、经 stdout 应答
     │   ├── JavaFxUpdateView.java    # 实现 UpdateView 的 JavaFX 视图（六种状态 + 状态插图槽位，由 /ui.css 提供样式）
-    │   └── ui.css                   # 窗口与对话框共用的深色扁平视觉系统
+    │   ├── ui.css                   # 窗口与对话框共用的深色扁平视觉系统
+    │   └── javafx-runtime-spec.json # 内置纯客户端 spec：本地 runtime 缓存的版本/平台/artifact SHA-256
     ├── devtools/               # 仅开发用工具 — 不打包进 Agent JAR
     │   ├── UiScreenshotHarness.java  # 离屏渲染每种界面状态到 screenshots/*.png
     │   ├── GenImages.java            # 生成占位状态插图到 images/
     │   ├── ImageCheck.java           # 校验生成的插图（边界、图标、透明）
-    │   └── ScreenshotProbe.java      # 校验每张截图是否显示了对应阶段插图
-    ├── lib/javafx/             # JavaFX 21 运行时 jar（javafx-base/-graphics/-controls/-swing，win）— --javafx 构建所需
-    ├── build.sh / build.bat    # 编译并打包两个 JAR（--javafx 追加 JavaFX 视图并打包 ui.css + images/）
+    │   ├── ScreenshotProbe.java      # 校验每张截图是否显示了对应阶段插图
+    │   ├── PhaseSwitchTest.java      # JavaFX 视图快速连续阶段切换测试
+    │   ├── WindowBoundsCheck.java    # 校验 Details 展开时窗口居中/不越界
+    │   └── VerifyLocalProbe.java     # 覆盖 MISSING/READY/CORRUPTED 校验 JavaFxRuntimeManager.verifyLocal()
+    ├── lib/javafx/             # JavaFX 21 运行时 jar（javafx-base/-graphics/-controls/-swing，win）— 编译期依赖 + 预置 runtime 来源
+    ├── build.sh / build.bat    # 编译并打包两个 JAR（始终包含 JavaFX 视图、ui.css、images/、内置 spec）
+    ├── make-distro.sh          # 可选发行包；--stage-runtime 预置 javafx-runtime/<ver>/ + runtime.json（不写 policy.json）
     └── setup-agent.sh / setup-agent.bat  # 写入配置并追加 -javaagent 到 JVM 参数
 ```
 

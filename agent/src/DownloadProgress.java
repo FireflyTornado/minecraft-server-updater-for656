@@ -13,7 +13,9 @@ final class DownloadProgress {
         /** A regular managed file from the update manifest. */
         FILE,
         /** The updater (agent) self-update. */
-        UPDATER
+        UPDATER,
+        /** A JavaFX runtime jar downloaded by the background runtime worker. */
+        JAVAFX
     }
 
     final boolean active;

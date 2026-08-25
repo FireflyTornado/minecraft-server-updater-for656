@@ -109,8 +109,12 @@ class ServerClient {
         return false;
     }
 
-    private boolean httpDownload(String urlStr, File dest,
-                                 String displayPath, DownloadProgress.Kind kind) {
+    /** Download from an absolute URL (our servers, or Maven Central for the
+     *  JavaFX runtime worker) into {@code dest}, emitting progress events.
+     *  Package-private so {@link JavaFxRuntimeManager} can reuse the same
+     *  streaming/progress logic for runtime jars. */
+    boolean httpDownload(String urlStr, File dest,
+                         String displayPath, DownloadProgress.Kind kind) {
         try {
             HttpURLConnection conn = (HttpURLConnection) URI.create(urlStr).toURL().openConnection();
             conn.setRequestMethod("GET");

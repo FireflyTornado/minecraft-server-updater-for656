@@ -85,7 +85,7 @@ Configuration is resolved in this order (normal mode):
 | `mc-update.server` | `http://localhost:25565` | Server URL(s) — comma-separated for **multi-source fallback** |
 | `mc-update.game-dir` | `.` | Minecraft directory |
 | `mc-update.debug` | `false` | Keep GUI open after sync |
-| `mc-update.ui` | `swing` | UI toolkit: `swing` (default) or `javafx` (experimental parallel view) |
+| `mc-update.ui` | `auto` | UI toolkit: `auto` (default), `javafx`, or `swing`. `auto` uses the JavaFX helper when the local runtime is ready, otherwise falls back to Swing |
 
 **Recommended: `mc-update.properties`** (written by setup script):
 ```properties
@@ -155,33 +155,44 @@ infers it from status text.
   directly. Debug mode adds a Close button that stays disabled until the flow
   allows it.
 
-### JavaFX view (experimental)
+### JavaFX view (helper JVM)
 
-The update window can also be rendered with JavaFX instead of Swing. This is a
-functionally-correct parallel implementation of the same toolkit-agnostic
-`UpdateView` contract, living in `agent/javafx/`. It is not the default yet.
+The update window can also be rendered with JavaFX instead of Swing. The JavaFX
+view lives in `agent/javafx/` and implements the same toolkit-agnostic
+`UpdateView` contract. It runs in a **separate helper JVM** (`--module-path
+javafx-runtime/<version> --add-modules javafx.controls -cp
+UpdateAgent_core.jar JavaFxEntryPoint`); the Minecraft JVM never loads
+`javafx.*`. The two processes talk JSONL over stdin/stdout
+(`EventCodec`). If the helper cannot be launched or the runtime is missing or
+corrupt, the agent silently uses the Swing view instead and the Minecraft
+launch is never affected.
+
+**Runtime sourcing is pure client-side.** Each agent release embeds
+`/javafx-runtime-spec.json` (version, platform, filenames, sizes, SHA-256) into
+the core JAR. `javafx-runtime/` next to the agent JARs is a *locally-rebuildable
+cache*: on a clean machine the first launch uses Swing and a background
+`javafx-runtime-worker` downloads the missing/corrupt jars from Maven Central
+(`org/openjfx/...`), verifying SHA-256 and atomically replacing each file;
+the JavaFX view is used from the *next* launch. The server manifest/API is never
+involved in the JavaFX runtime.
 
 To use it:
 
-1. **Build** the core JAR with the JavaFX view:
+1. **Build** the core JAR (the JavaFX view is always compiled in):
    ```bash
    cd agent
-   ./build.sh --javafx        # or build.bat --javafx on Windows
+   ./build.sh        # or build.bat on Windows
    ```
-   This needs the JavaFX 21 runtime jars (`javafx-base`, `javafx-graphics`,
-   `javafx-controls`, win classifier) in `agent/lib/javafx/` — the build prints
-   the download location if they are missing.
-2. **Switch** the entry layer to JavaFX with `mc-update.ui=javafx`, resolved
-   with the same precedence as the other `mc-update.*` properties (config file
-   > agent args > system properties > default). Example:
-   ```
-   mc-update.ui=javafx
-   ```
-   The default `swing` keeps using the existing Swing view.
-3. **Run**: the JavaFX jars must also be on the client JVM's classpath (e.g.
-   add `agent/lib/javafx/*` to the launch JVM arguments alongside
-   `-javaagent`). If the JavaFX implementation is absent or cannot start,
-   `UpdateAgent` logs a warning and falls back to the Swing view.
+   The JavaFX 21 runtime jars (`javafx-base`, `javafx-graphics`,
+   `javafx-controls`, `javafx-swing`, win classifier) are auto-downloaded from
+   Maven Central into `agent/lib/javafx/` by the build when missing. These jars
+   are the *compile-time* dependency and the source for an optional pre-staged
+   runtime (`./make-distro.sh --stage-runtime`).
+2. **Run**: the default `mc-update.ui=auto` picks JavaFX when
+   `javafx-runtime/` is READY (matching the embedded spec) and the helper
+   JVM's `java` is found; otherwise it falls back to Swing. Force either way
+   with `mc-update.ui=javafx` or `mc-update.ui=swing`. `remove-javafx=true`
+   deletes the local runtime cache and forces Swing.
 
 #### Status illustrations & layout
 
@@ -250,7 +261,7 @@ off-screen by the dev harness `agent/devtools/UiScreenshotHarness.java`:
 │   └── requirements.txt
 └── agent/
     ├── META-INF/MANIFEST.MF   # Premain-Class: Launcher
-    ├── src/                   # Business layer + Swing view (always compiled)
+    ├── src/                   # Business layer + Swing view + JavaFX helper-JVM bridge (always compiled)
     │   ├── Launcher.java           # -javaagent entry; swaps core JAR from .new, then loads it
     │   ├── UpdateAgent.java        # Core entry (premain): config resolution + update flow
     │   ├── UpdateApplication.java  # Composition root: wires service + view + controller; holds no flow decisions
@@ -263,8 +274,14 @@ off-screen by the dev harness `agent/devtools/UiScreenshotHarness.java`:
     │   ├── UpdateViewListener.java # View→controller user-action callback (window close / debug close)
     │   ├── UpdateGUI.java          # Swing UI (status, progress, log, speed); implements UpdateView
     │   ├── UiModel.java            # Immutable display data handed to the UI
+    │   ├── UiSnapshot.java         # Immutable UI-state snapshot used by the view (incl. the Swing fallback)
+    │   ├── ViewApplier.java        # Applies UpdateEvents to the current view state
+    │   ├── RemoteUpdateView.java   # Agent-side UpdateView proxying to the JavaFX helper JVM over JSONL
     │   ├── UiDispatcher.java       # "Run on UI thread" abstraction over the UI toolkit
     │   ├── SwingUiDispatcher.java  # UiDispatcher backed by Swing's EDT
+    │   ├── DirectUiDispatcher.java # UiDispatcher running on the JavaFX platform thread inside the helper JVM
+    │   ├── JavaFxHelperProcess.java    # Spawns/manages the JavaFX helper JVM subprocess
+    │   ├── JavaFxRuntimeManager.java   # Verifies/downloads the local javafx-runtime/ cache against the embedded spec
     │   ├── UpdateResult.java       # Update outcome: updated / failed counts
     │   ├── ServerClient.java       # HTTP client with multi-server fallback
     │   ├── FileManager.java        # Path-safety, SHA-256, atomic replace, stale-file cleanup
@@ -272,20 +289,25 @@ off-screen by the dev harness `agent/devtools/UiScreenshotHarness.java`:
     │   ├── FileEntry.java          # Single manifest file entry (path, hash, size)
     │   ├── DownloadProgress.java   # Per-file download progress snapshot (worker ↔ UI)
     │   ├── JsonParser.java         # Lightweight JSON parsing helpers (no external deps)
+    │   ├── EventCodec.java         # JSONL IPC codec between the Minecraft JVM and the JavaFX helper JVM
     │   └── FormatUtil.java         # Formatting helpers (e.g. download speed)
     ├── images/                 # Status illustrations for the JavaFX view (one per phase); bundled into the core JAR
-    ├── javafx/                 # JavaFX view — parallel impl of UpdateView (built only with --javafx)
-    │   ├── JavaFxEntryPoint.java    # JavaFX composition root (reached reflectively from UpdateAgent)
-    │   ├── JavaFxUiDispatcher.java  # UiDispatcher backed by Platform.runLater
+    ├── javafx/                 # JavaFX view — parallel impl of UpdateView, always compiled; runs in the helper JVM
+    │   ├── JavaFxEntryPoint.java    # Helper-JVM main: reads JSONL on stdin, renders the view, replies on stdout
     │   ├── JavaFxUpdateView.java    # JavaFX view implementing UpdateView (six phases, status-illustration slot, /ui.css styling)
-    │   └── ui.css                   # Dark flat visual system shared by the window and dialogs
+    │   ├── ui.css                   # Dark flat visual system shared by the window and dialogs
+    │   └── javafx-runtime-spec.json # Embedded pure-client spec: version/platform/artifact SHA-256 for the local runtime cache
     ├── devtools/               # Dev-only tools — never shipped in the agent JARs
     │   ├── UiScreenshotHarness.java  # Off-screen harness; renders every UI state to screenshots/*.png
     │   ├── GenImages.java            # Generates the placeholder status illustrations into images/
     │   ├── ImageCheck.java           # Verifies generated illustrations (bounds, glyph, transparency)
-    │   └── ScreenshotProbe.java      # Verifies each screenshot shows its phase illustration
-    ├── lib/javafx/             # JavaFX 21 runtime jars (javafx-base/-graphics/-controls/-swing, win) — required by --javafx
-    ├── build.sh / build.bat    # Compile + package both JARs (--javafx adds the JavaFX view and bundles ui.css + images/)
+    │   ├── ScreenshotProbe.java      # Verifies each screenshot shows its phase illustration
+    │   ├── PhaseSwitchTest.java      # Rapid consecutive phase-switch test for the JavaFX view
+    │   ├── WindowBoundsCheck.java    # Verifies the window stays centred/on-screen when Details expands
+    │   └── VerifyLocalProbe.java     # Exercises JavaFxRuntimeManager.verifyLocal() across MISSING/READY/CORRUPTED
+    ├── lib/javafx/             # JavaFX 21 runtime jars (javafx-base/-graphics/-controls/-swing, win) — compile-time dep + pre-stage source
+    ├── build.sh / build.bat    # Compile + package both JARs (always includes the JavaFX view, ui.css, images/, embedded spec)
+    ├── make-distro.sh          # Optional distro bundle; --stage-runtime pre-stages javafx-runtime/<ver>/ + runtime.json (no policy.json)
     └── setup-agent.sh / setup-agent.bat  # Write config + append -javaagent to JVM args
 ```
 

@@ -9,7 +9,16 @@
  * System properties (or agent args):
  *   -Dmc-update.server=http://192.168.1.100:25565
  *   -Dmc-update.game-dir=C:\\path\\to\\.minecraft
- *   -Dmc-update.ui=javafx       (optional: "swing" default, or "javafx")
+ *   -Dmc-update.ui=auto         (optional: "auto" default, "javafx", or "swing")
+ *   -javaagent:...=remove-javafx=true   (admin: delete the local JavaFX runtime, then run with Swing)
+ *
+ * UI selection ("auto"):
+ *   The JavaFX view runs in a separate helper JVM that never touches the
+ *   Minecraft JVM's classpath. "auto" uses it when the local runtime (built
+ *   from the embedded /javafx-runtime-spec.json) is READY and a child JVM can
+ *   be spawned; otherwise the Swing view is used and a background worker
+ *   best-effort repairs the runtime from Maven Central for the next launch.
+ *   On a helper crash the flow falls back to Swing mid-run.
  *
  * Compile:
  *   javac -d build src/*.java
@@ -78,7 +87,7 @@ public class UpdateAgent {
                 agentArgs.get("ui"),
                 System.getProperty(PROP_UI),
                 fileConfig.getProperty("ui"),
-                "swing"
+                "auto"
             );
         } else {
             server = coalesce(
@@ -98,7 +107,7 @@ public class UpdateAgent {
                 fileConfig.getProperty("ui"),
                 agentArgs.get("ui"),
                 System.getProperty(PROP_UI),
-                "swing"
+                "auto"
             );
         }
 
@@ -107,12 +116,27 @@ public class UpdateAgent {
             System.setProperty(PROP_DEBUG, "true");
         }
 
-        // Block premain until update check finishes, then allow Minecraft to start.
-        // UI toolkit is chosen by mc-update.ui: "javafx" uses the JavaFX view,
-        // anything else (default) uses the Swing view.
+        // remove-javafx: delete the local JavaFX runtime, then run with Swing.
+        if ("true".equalsIgnoreCase(agentArgs.get("remove-javafx"))) {
+            JavaFxRuntimeManager.remove();
+            System.out.println("[UpdateAgent] JavaFX runtime removed; using Swing UI.");
+            ui = "swing";
+        }
+
+        // Block premain until the update check finishes, then allow Minecraft
+        // to start. UI toolkit: "auto" (default) uses the JavaFX helper when
+        // the local runtime is READY and a child JVM can be spawned; explicit
+        // "javafx" forces it; "swing" uses the Swing view.
         CountDownLatch latch = new CountDownLatch(1);
-        if ("javafx".equalsIgnoreCase(ui)) {
-            startJavaFxFlow(gameDir, server, debug, latch);
+        boolean helperUi = "javafx".equalsIgnoreCase(ui) || "auto".equalsIgnoreCase(ui);
+        if (helperUi) {
+            helperUi = JavaFxRuntimeManager.verifyLocal()
+                            == JavaFxRuntimeManager.RuntimeStatus.READY
+                    && JavaFxHelperProcess.javaAvailable();
+        }
+        if (helperUi) {
+            UpdateApplication.startHelperFlow(
+                    gameDir, UpdateApplication.parseServerList(server), debug, latch);
         } else {
             UpdateApplication app = new UpdateApplication(gameDir, server, debug, latch);
             SwingUtilities.invokeLater(app::start);
@@ -122,28 +146,6 @@ public class UpdateAgent {
             latch.await();  // block until update check completes
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-        }
-    }
-
-    /**
-     * Start the update flow with the JavaFX view. The JavaFX composition root
-     * ({@code JavaFxEntryPoint}) is loaded by name so the core JAR still
-     * compiles and runs without the JavaFX runtime on the classpath; if the
-     * JavaFX implementation is missing or the runtime cannot be started, fall
-     * back to the Swing view.
-     */
-    private static void startJavaFxFlow(String gameDir, String server,
-                                        boolean debug, CountDownLatch latch) {
-        try {
-            Class<?> entry = Class.forName("JavaFxEntryPoint");
-            entry.getMethod("launch", String.class, String.class,
-                            boolean.class, CountDownLatch.class)
-                 .invoke(null, gameDir, server, debug, latch);
-        } catch (Exception | LinkageError e) {
-            e.printStackTrace();
-            System.err.println("[UpdateAgent] JavaFX view unavailable, falling back to Swing.");
-            UpdateApplication app = new UpdateApplication(gameDir, server, debug, latch);
-            SwingUtilities.invokeLater(app::start);
         }
     }
 

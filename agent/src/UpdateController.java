@@ -24,11 +24,13 @@ import java.util.concurrent.CountDownLatch;
 final class UpdateController implements UpdateListener, UpdateViewListener {
 
     private final UpdateService service;
-    private final UiDispatcher dispatcher;
+    /** Volatile + swappable so the helper-mode fallback can atomically route to
+     *  Swing: the fallback swaps the view first, then the dispatcher. */
+    private volatile UiDispatcher dispatcher;
     private final CountDownLatch latch;
     private final boolean debug;
 
-    private UpdateView view;
+    private volatile UpdateView view;
 
     UpdateController(UpdateService service, UiDispatcher dispatcher,
                      CountDownLatch latch, boolean debug) {
@@ -41,6 +43,11 @@ final class UpdateController implements UpdateListener, UpdateViewListener {
     /** Bind the view. Must be called before {@link #start()}. */
     void attach(UpdateView view) {
         this.view = view;
+    }
+
+    /** Swap the dispatcher (used by the Swing fallback to route to the EDT). */
+    void setDispatcher(UiDispatcher dispatcher) {
+        this.dispatcher = dispatcher;
     }
 
     /** Start the update on a background thread and open the view. */
