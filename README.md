@@ -153,10 +153,11 @@ infers it from status text.
 - **Details** (collapsible) — server URL, game directory and the full log.
   Collapsed by default, auto-expanded on error and in debug mode.
 - **Closing the window** — while an update is running the close request asks for
-  confirmation ("Quit update?"). In the terminal phases, Success auto-closes after
-  a short delay, while an Error stays open until the user closes it — closing the
-  error window exits the process without launching Minecraft. Debug mode adds a
-  Close button that stays disabled until the flow allows it.
+  confirmation ("Quit update?"). In the terminal phases, Success stays visible for
+  2 seconds (so the result is readable) and then auto-closes, while an Error stays
+  open until the user closes it — closing the error window exits the process
+  without launching Minecraft. Debug mode adds a Close button that stays disabled
+  until the flow allows it.
 
 ### JavaFX view (helper JVM)
 
