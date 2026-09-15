@@ -9,6 +9,7 @@ import com.zack88604.autoupdater.infrastructure.files.FileManager;
 import com.zack88604.autoupdater.infrastructure.files.FileTransaction;
 import com.zack88604.autoupdater.infrastructure.http.ServerClient;
 import com.zack88604.autoupdater.infrastructure.json.ManifestParser;
+import com.zack88604.autoupdater.infrastructure.security.ManifestSignatureVerifier;
 
 import java.io.File;
 import java.io.IOException;
@@ -32,15 +33,24 @@ public final class UpdateService {
     private final String gameDirectory;
     private final List<String> serverUrls;
     private final FileManager fileManager;
+    private final String manifestPublicKey;
+    private final String manifestKeyId;
     private final Object transactionLock = new Object();
 
     private FileTransaction activeTransaction;
 
     public UpdateService(String gameDirectory, List<String> serverUrls) {
+        this(gameDirectory, serverUrls, null, null);
+    }
+
+    public UpdateService(String gameDirectory, List<String> serverUrls,
+                         String manifestPublicKey, String manifestKeyId) {
         this.gameDirectory = Objects.requireNonNull(gameDirectory, "gameDirectory");
         Objects.requireNonNull(serverUrls, "serverUrls");
         this.serverUrls = Collections.unmodifiableList(new ArrayList<>(serverUrls));
         this.fileManager = new FileManager(new File(gameDirectory));
+        this.manifestPublicKey = manifestPublicKey;
+        this.manifestKeyId = manifestKeyId;
     }
 
     /** Return configured server URLs in failover priority order. */
@@ -88,7 +98,8 @@ public final class UpdateService {
 
             relay.status(UpdatePhase.PREPARING, "Checking for updates...", null, true);
             relay.log("Fetching manifest...");
-            String manifestJson = serverClient.getWithFallback("/api/v2/manifest");
+            String signedEnvelope = serverClient.getWithFallback("/api/v3/manifest");
+            String manifestJson = manifestVerifier().verifyEnvelope(signedEnvelope);
             Manifest manifest = ManifestParser.parse(manifestJson);
 
             checkSelfUpdate(relay, serverClient, manifest, transaction);
@@ -179,6 +190,10 @@ public final class UpdateService {
         if (transaction != null) {
             transaction.rollback();
         }
+    }
+
+    private ManifestSignatureVerifier manifestVerifier() throws IOException {
+        return new ManifestSignatureVerifier(manifestPublicKey, manifestKeyId);
     }
 
     private boolean needsDownload(EventRelay relay, File localFile, FileEntry entry) {

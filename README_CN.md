@@ -39,7 +39,7 @@ sequenceDiagram
     L->>L: 存在 .new 则替换核心 JAR
     L->>A: 加载 UpdateAgent_core.jar 并委托
     A->>A: 解析配置、选择 GUI adapter
-    A->>S: GET /api/v2/manifest
+    A->>S: GET /api/v3/manifest（已签名）
     A->>A: agent 自更新检查
     loop 每个受管文件
         A->>A: SHA-256 比对
@@ -94,11 +94,11 @@ docker exec mc-update python3 /app/generate_manifest.py \
 ```bash
 # Linux/macOS（需要带 javac 的 JDK）
 bash agent/build.sh
-bash agent/setup-agent.sh ~/.minecraft/versions/1.20.1 http://your-server:25565
+bash agent/setup-agent.sh ~/.minecraft/versions/1.20.1 http://your-server:25565 BASE64_X509_ED25519_PUBLIC_KEY
 
 # Windows
 agent\build.bat
-agent\setup-agent.bat C:\path\to\instance http://your-server:25565
+agent\setup-agent.bat C:\path\to\instance http://your-server:25565 BASE64_X509_ED25519_PUBLIC_KEY
 ```
 
 安装脚本会将服务器配置写入游戏目录下的 `mc-update.properties`，并向启动器 JVM 参数追加 `-javaagent:<path>/UpdateAgent.jar`。
@@ -115,11 +115,25 @@ agent\setup-agent.bat C:\path\to\instance http://your-server:25565
     └── gui-runtimes/                     # 已校验的 V2 helper 运行时解压目录
 ```
 
+## 签名清单配置
+
+服务端首次签名清单时，会在 `/data/manifest-keys/` 生成持久化 Ed25519 签名密钥，私钥不会通过 API 提供。管理员应通过可信渠道把 `/data/manifest-keys/manifest-signing-public.der.base64` 复制到每个客户端，并固定到 `mc-update.properties`：
+
+```properties
+server=http://your-server:25565
+manifest-public-key=BASE64_X509_ED25519_PUBLIC_KEY
+# 可选：manifest-key-id=ed25519-0123456789abcdef
+```
+
+客户端从 `/api/v3/manifest` 获取清单，在改动任何文件前验证 Ed25519 签名、有效期和内嵌清单哈希。Ed25519 需要 Java 15 或更高版本。`/api/v3/manifest-public-key` 仅用于管理员检查，客户端绝不自动信任它。`/api/v2/manifest` 保留给旧客户端。
+
 ## API
 
 | 端点 | 方法 | 描述 |
 |------|------|------|
 | `/api/v2/manifest` | GET | 完整文件清单（路径、SHA-256、大小） |
+| `/api/v3/manifest` | GET | 供固定公钥客户端使用的 Ed25519 签名清单信封 |
+| `/api/v3/manifest-public-key` | GET | 供管理员固定公钥的公开密钥描述 |
 | `/api/files/<path>` | GET | 下载指定资源文件 |
 | `/api/agent` | GET | 下载最新 `UpdateAgent_core.jar` |
 | `/api/v2/gui-preset` | GET | 可选的服务端 GUI 预设描述 |
@@ -148,6 +162,7 @@ agent\setup-agent.bat C:\path\to\instance http://your-server:25565
 |------|--------|------|
 | `PORT` | `25565` | HTTP 端口 |
 | `GENERATE_TOKEN` | *（空）* | 保护 `/api/generate` 接口 |
+| `MANIFEST_SIGNATURE_TTL_SECONDS` | `604800` | 签名清单有效期（1 秒–31 天） |
 | `DEBUG` | `false` | Flask 调试模式 |
 
 ### Agent（JVM 属性）
@@ -168,6 +183,8 @@ agent\setup-agent.bat C:\path\to\instance http://your-server:25565
 | `mc-update.debug` | `false` | 同步完成后保持窗口打开 |
 | `mc-update.gui-adapter` | *（内建 Swing）* | `GuiAdapterFactory` 的完整类名 |
 | `mc-update.server-gui` | `disabled` | 服务端预设策略：`disabled`、`recommended` 或 `required` |
+| `mc-update.manifest-public-key` | *（必填）* | 管理员固定的 Base64 X.509 Ed25519 公钥 |
+| `mc-update.manifest-key-id` | *（可选）* | 期望的 `ed25519-…` 密钥标识 |
 
 **推荐方式：`mc-update.properties`**（由安装脚本写入）：
 ```properties
