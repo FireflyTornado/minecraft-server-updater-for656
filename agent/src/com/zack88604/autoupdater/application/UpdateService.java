@@ -11,6 +11,7 @@ import com.zack88604.autoupdater.infrastructure.files.FileTransaction;
 import com.zack88604.autoupdater.infrastructure.http.ServerClient;
 import com.zack88604.autoupdater.infrastructure.json.ManifestParser;
 import com.zack88604.autoupdater.infrastructure.security.ManifestSignatureVerifier;
+import com.zack88604.autoupdater.infrastructure.security.ManifestKeyTrustBootstrap;
 
 import java.io.File;
 import java.io.IOException;
@@ -102,7 +103,7 @@ public final class UpdateService {
             relay.status(UpdatePhase.PREPARING, "Checking for updates...", null, true);
             relay.log("Fetching manifest...");
             String signedEnvelope = serverClient.getWithFallback("/api/v3/manifest");
-            String manifestJson = manifestVerifier().verifyEnvelope(signedEnvelope);
+            String manifestJson = manifestVerifier(serverClient).verifyEnvelope(signedEnvelope);
             Manifest manifest = ManifestParser.parse(manifestJson);
 
             checkSelfUpdate(relay, serverClient, manifest, transaction);
@@ -253,6 +254,11 @@ public final class UpdateService {
 
     private ManifestSignatureVerifier manifestVerifier() throws IOException {
         return new ManifestSignatureVerifier(manifestPublicKey, manifestKeyId);
+    }
+
+    private ManifestSignatureVerifier manifestVerifier(ServerClient serverClient) throws IOException {
+        return ManifestKeyTrustBootstrap.resolve(new File(gameDirectory), serverClient,
+                manifestPublicKey, manifestKeyId);
     }
 
     private boolean needsDownload(EventRelay relay, File localFile, FileEntry entry) {

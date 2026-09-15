@@ -125,7 +125,7 @@ manifest-public-key=BASE64_X509_ED25519_PUBLIC_KEY
 # Optional: manifest-key-id=ed25519-0123456789abcdef
 ```
 
-The client fetches `/api/v3/manifest` and verifies the Ed25519 signature, expiry, and embedded manifest hash before touching files. The agent runtime requires Java 15 or later for Ed25519. `/api/v3/manifest-public-key` is for administrator inspection only; clients never trust it automatically. `/api/v2/manifest` remains available for legacy clients.
+When no public key is configured, the client shows a one-time confirmation with the server URL, key ID, and SHA-256 fingerprint; approval pins the key locally. A pinned key is never replaced automatically. The client fetches `/api/v3/manifest` and verifies the Ed25519 signature, expiry, and embedded manifest hash before touching files. The agent runtime requires Java 15 or later for Ed25519. `/api/v3/manifest-public-key` is for administrator inspection only; clients never trust it automatically. `/api/v2/manifest` remains available for legacy clients.
 
 ## Safe skip update
 

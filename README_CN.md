@@ -125,7 +125,7 @@ manifest-public-key=BASE64_X509_ED25519_PUBLIC_KEY
 # 可选：manifest-key-id=ed25519-0123456789abcdef
 ```
 
-客户端从 `/api/v3/manifest` 获取清单，在改动任何文件前验证 Ed25519 签名、有效期和内嵌清单哈希。Ed25519 需要 Java 15 或更高版本。`/api/v3/manifest-public-key` 仅用于管理员检查，客户端绝不自动信任它。`/api/v2/manifest` 保留给旧客户端。
+未配置公钥时，客户端会一次性显示服务器地址、key ID 与 SHA-256 指纹供用户确认；同意后会固定该密钥，之后绝不自动替换。客户端从 `/api/v3/manifest` 获取清单，在改动任何文件前验证 Ed25519 签名、有效期和内嵌清单哈希。Ed25519 需要 Java 15 或更高版本。`/api/v3/manifest-public-key` 仅用于管理员检查，客户端绝不自动信任它。`/api/v2/manifest` 保留给旧客户端。
 
 ## 安全跳过更新
 
