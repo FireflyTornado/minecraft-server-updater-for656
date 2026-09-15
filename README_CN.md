@@ -127,6 +127,10 @@ manifest-public-key=BASE64_X509_ED25519_PUBLIC_KEY
 
 客户端从 `/api/v3/manifest` 获取清单，在改动任何文件前验证 Ed25519 签名、有效期和内嵌清单哈希。Ed25519 需要 Java 15 或更高版本。`/api/v3/manifest-public-key` 仅用于管理员检查，客户端绝不自动信任它。`/api/v2/manifest` 保留给旧客户端。
 
+## 安全跳过更新
+
+完整更新成功后，更新器会逐项校验本地资源，并以原子方式缓存已经通过 Ed25519 验证的 v3 清单信封到 `.mc-update/signed-manifest-cache.properties`。用户确认跳过进行中的更新时，更新器会先还原本次更新，再校验缓存的 Ed25519 签名、有效期、服务器身份、清单哈希，以及每个列出资源的 SHA-256 与大小。缓存被人为修改、过期，或任意资源不一致时，Minecraft 都不会启动。
+
 ## API
 
 | 端点 | 方法 | 描述 |

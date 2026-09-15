@@ -6,6 +6,7 @@ import com.zack88604.autoupdater.domain.Manifest;
 import com.zack88604.autoupdater.domain.UpdateResult;
 import com.zack88604.autoupdater.gui.api.UpdatePhase;
 import com.zack88604.autoupdater.infrastructure.files.FileManager;
+import com.zack88604.autoupdater.infrastructure.cache.SignedManifestCacheStore;
 import com.zack88604.autoupdater.infrastructure.files.FileTransaction;
 import com.zack88604.autoupdater.infrastructure.http.ServerClient;
 import com.zack88604.autoupdater.infrastructure.json.ManifestParser;
@@ -33,6 +34,7 @@ public final class UpdateService {
     private final String gameDirectory;
     private final List<String> serverUrls;
     private final FileManager fileManager;
+    private final SignedManifestCacheStore manifestCache;
     private final String manifestPublicKey;
     private final String manifestKeyId;
     private final Object transactionLock = new Object();
@@ -49,6 +51,7 @@ public final class UpdateService {
         Objects.requireNonNull(serverUrls, "serverUrls");
         this.serverUrls = Collections.unmodifiableList(new ArrayList<>(serverUrls));
         this.fileManager = new FileManager(new File(gameDirectory));
+        this.manifestCache = new SignedManifestCacheStore(new File(gameDirectory));
         this.manifestPublicKey = manifestPublicKey;
         this.manifestKeyId = manifestKeyId;
     }
@@ -161,10 +164,12 @@ public final class UpdateService {
             fileManager.cleanStaleFiles(manifestFiles, manifest.getManagedPaths(),
                     manifest.getExcludedPaths(), relay::log, relay::checkpoint, transaction);
 
+            verifyManifestResources(relay, manifest, "Verifying updated resources before caching...");
             relay.checkpoint();
             UpdateResult result = new UpdateResult(updated, failed);
             transaction.commit();
             clearActiveTransaction(transaction);
+            saveVerifiedManifestCache(relay, signedEnvelope);
             return result;
         } catch (UpdateExecutionControl.CancelledException cancellation) {
             // Keep the transaction available for the controller's rollback step.
@@ -190,6 +195,60 @@ public final class UpdateService {
         if (transaction != null) {
             transaction.rollback();
         }
+    }
+
+    public void verifyCachedManifest(UpdateListener listener) throws IOException {
+        Objects.requireNonNull(listener, "listener");
+        EventRelay relay = new EventRelay(listener, new UpdateExecutionControl());
+        try {
+            relay.status(UpdatePhase.CHECKING, "Verifying cached resources...",
+                    "Minecraft starts only when the signed cache matches local files", true);
+            String envelope = manifestCache.load(serverIdentity());
+            Manifest manifest = ManifestParser.parse(manifestVerifier().verifyEnvelope(envelope));
+            if (!manifest.isFileListPresent()) {
+                throw new IOException("Cached signed manifest does not contain a file list");
+            }
+            verifyManifestResources(relay, manifest, "Verifying local files against cached manifest...");
+            relay.overallProgress(100);
+        } finally {
+            relay.flushLogs();
+        }
+    }
+
+    private void verifyManifestResources(EventRelay relay, Manifest manifest, String status)
+            throws IOException {
+        relay.status(UpdatePhase.CHECKING, status, null, true);
+        int checked = 0;
+        for (FileEntry entry : manifest.getFiles()) {
+            relay.checkpoint();
+            File localFile = fileManager.resolveManagedFile(entry.getPath());
+            if (localFile == null || !localFile.isFile() || localFile.length() != entry.getSize()) {
+                throw new IOException("Cached manifest resource is missing or has an invalid size: " + entry.getPath());
+            }
+            String hash = fileManager.sha256(localFile, relay::checkpoint);
+            if (hash == null || !hash.equals(entry.getSha256())) {
+                throw new IOException("Cached manifest resource hash does not match: " + entry.getPath());
+            }
+            checked++;
+        }
+        relay.log("Verified " + checked + " cached manifest resource(s)");
+    }
+
+    private void saveVerifiedManifestCache(EventRelay relay, String envelope) {
+        try {
+            manifestCache.save(serverIdentity(), envelope);
+            relay.log("Saved verified signed manifest cache");
+        } catch (IOException error) {
+            relay.log("  [WARN] Cannot save signed manifest cache: " + error.getMessage());
+        }
+    }
+
+    private String serverIdentity() {
+        StringBuilder identity = new StringBuilder();
+        for (String serverUrl : serverUrls) {
+            identity.append(serverUrl.length()).append(':').append(serverUrl).append('\n');
+        }
+        return identity.toString();
     }
 
     private ManifestSignatureVerifier manifestVerifier() throws IOException {

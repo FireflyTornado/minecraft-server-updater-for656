@@ -127,6 +127,10 @@ manifest-public-key=BASE64_X509_ED25519_PUBLIC_KEY
 
 The client fetches `/api/v3/manifest` and verifies the Ed25519 signature, expiry, and embedded manifest hash before touching files. The agent runtime requires Java 15 or later for Ed25519. `/api/v3/manifest-public-key` is for administrator inspection only; clients never trust it automatically. `/api/v2/manifest` remains available for legacy clients.
 
+## Safe skip update
+
+After a complete update, the agent verifies every manifest resource locally and atomically caches the already Ed25519-signed v3 envelope in `.mc-update/signed-manifest-cache.properties`. When the user confirms skipping an in-progress update, the agent first rolls back that run, then re-verifies the cached Ed25519 signature, expiry, server identity, manifest hash, and SHA-256/size of every listed local resource. Any missing, changed, expired, or manually modified cache entry blocks Minecraft startup.
+
 ## API
 
 | Endpoint | Method | Description |
