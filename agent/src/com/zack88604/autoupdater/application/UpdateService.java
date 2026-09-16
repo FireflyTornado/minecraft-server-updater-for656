@@ -69,7 +69,15 @@ public final class UpdateService {
 
     /** Run the full update flow without pause or cancellation controls. */
     public UpdateResult run(UpdateListener listener) throws Exception {
-        return run(listener, new UpdateExecutionControl());
+        try {
+            return run(listener, new UpdateExecutionControl());
+        } catch (Exception exception) {
+            discardUncontrolledFailure(exception);
+            throw exception;
+        } catch (Error error) {
+            discardUncontrolledFailure(error);
+            throw error;
+        }
     }
 
     /**
@@ -176,10 +184,10 @@ public final class UpdateService {
             // Keep the transaction available for the controller's rollback step.
             throw cancellation;
         } catch (Exception exception) {
-            discardTransaction(transaction, exception);
+            // Preserve originals until the controller accepts skip or exit.
             throw exception;
         } catch (Error error) {
-            discardTransaction(transaction, error);
+            // Preserve originals until the controller accepts skip or exit.
             throw error;
         } finally {
             relay.flushLogs();
@@ -195,6 +203,18 @@ public final class UpdateService {
         }
         if (transaction != null) {
             transaction.rollback();
+        }
+    }
+
+    /** Discard a failed update transaction when the user chooses to exit. */
+    public void discardFailedUpdate() throws IOException {
+        FileTransaction transaction;
+        synchronized (transactionLock) {
+            transaction = activeTransaction;
+            activeTransaction = null;
+        }
+        if (transaction != null) {
+            transaction.commit();
         }
     }
 
@@ -423,13 +443,11 @@ public final class UpdateService {
         }
     }
 
-    private void discardTransaction(FileTransaction transaction, Throwable original) {
+    private void discardUncontrolledFailure(Throwable original) {
         try {
-            transaction.commit();
+            discardFailedUpdate();
         } catch (IOException cleanupError) {
             original.addSuppressed(cleanupError);
-        } finally {
-            clearActiveTransaction(transaction);
         }
     }
 

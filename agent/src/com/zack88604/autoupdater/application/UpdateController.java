@@ -4,6 +4,7 @@ import com.zack88604.autoupdater.domain.UpdateResult;
 import com.zack88604.autoupdater.gui.api.ClosePolicy;
 import com.zack88604.autoupdater.gui.api.GuiAdapter;
 import com.zack88604.autoupdater.gui.api.UpdateUiState;
+import com.zack88604.autoupdater.gui.api.UpdateErrorCode;
 import com.zack88604.autoupdater.gui.api.UpdateView;
 import com.zack88604.autoupdater.gui.api.UpdateViewActions;
 
@@ -97,7 +98,14 @@ public final class UpdateController implements UpdateViewActions {
     public void requestClose() {
         ClosePolicy currentClosePolicy = closePolicy;
         if (currentClosePolicy == ClosePolicy.EXIT_FAILURE) {
-            System.exit(1);
+            exitAfterFailure();
+            return;
+        }
+
+        if (currentClosePolicy == ClosePolicy.SKIP_OR_EXIT) {
+            if (markCloseRequested(false)) {
+                exitAfterFailure();
+            }
             return;
         }
 
@@ -115,10 +123,27 @@ public final class UpdateController implements UpdateViewActions {
     }
 
     @Override
+    public void requestSkipUpdate() {
+        if (closePolicy != ClosePolicy.SKIP_OR_EXIT) {
+            return;
+        }
+        if (markCloseRequested(false)) {
+            rollbackThenVerifyCachedManifestAndLaunch(false);
+        }
+    }
+
+    @Override
     public void notifyWindowClosed() {
         ClosePolicy currentClosePolicy = closePolicy;
         if (currentClosePolicy == ClosePolicy.EXIT_FAILURE) {
-            System.exit(1);
+            exitAfterFailure();
+            return;
+        }
+
+        if (currentClosePolicy == ClosePolicy.SKIP_OR_EXIT) {
+            if (markCloseRequested(false)) {
+                exitAfterFailure();
+            }
             return;
         }
 
@@ -156,6 +181,22 @@ public final class UpdateController implements UpdateViewActions {
         }
     }
 
+    private void exitAfterFailure() {
+        Thread exit = new Thread(() -> {
+            try {
+                workerFinished.await();
+                service.discardFailedUpdate();
+            } catch (InterruptedException exception) {
+                Thread.currentThread().interrupt();
+            } catch (IOException exception) {
+                exception.printStackTrace();
+            }
+            System.exit(1);
+        }, "update-failure-exit");
+        exit.setDaemon(true);
+        exit.start();
+    }
+
     private void rollbackThenVerifyCachedManifestAndLaunch(boolean viewAlreadyClosed) {
         Thread rollback = new Thread(() -> {
             try {
@@ -188,7 +229,8 @@ public final class UpdateController implements UpdateViewActions {
         }
         String message = cause.getMessage() != null ? cause.getMessage() : cause.toString();
         onUpdateEvent(new UpdateEvent.Failed(
-                "Unable to skip the update safely; Minecraft will not start: " + message, cause));
+                "Unable to skip the update safely; Minecraft will not start: " + message,
+                cause, UpdateErrorCode.FILESYSTEM, false));
     }
 
     private void startWorker() {
@@ -200,7 +242,8 @@ public final class UpdateController implements UpdateViewActions {
                 // The rollback thread restores the transaction before Minecraft starts.
             } catch (Throwable cause) {
                 String message = cause.getMessage() != null ? cause.getMessage() : cause.toString();
-                onUpdateEvent(new UpdateEvent.Failed("Update error: " + message, cause));
+                onUpdateEvent(new UpdateEvent.Failed("Update error: " + message, cause,
+                        classifyError(cause)));
             } finally {
                 workerFinished.countDown();
             }
@@ -246,6 +289,41 @@ public final class UpdateController implements UpdateViewActions {
             launchLatch.countDown();
             closeView();
         });
+    }
+
+    private static UpdateErrorCode classifyError(Throwable cause) {
+        for (Throwable current = cause; current != null; current = current.getCause()) {
+            if (current instanceof java.net.ConnectException
+                    || current instanceof java.net.SocketTimeoutException
+                    || current instanceof java.net.NoRouteToHostException
+                    || current instanceof java.net.SocketException
+                    || current instanceof javax.net.ssl.SSLException
+                    || current instanceof java.net.UnknownHostException
+                    || current instanceof java.net.http.HttpTimeoutException) {
+                return UpdateErrorCode.NETWORK;
+            }
+            if (current instanceof java.nio.file.FileSystemException) {
+                return UpdateErrorCode.FILESYSTEM;
+            }
+            if (current instanceof SecurityException) {
+                return UpdateErrorCode.MANIFEST_AUTHENTICATION;
+            }
+            if (current instanceof IllegalArgumentException) {
+                return UpdateErrorCode.CONFIGURATION;
+            }
+            String message = current.getMessage();
+            if (message != null) {
+                String normalized = message.toLowerCase(java.util.Locale.ROOT);
+                if (normalized.contains("signature") || normalized.contains("signed manifest")
+                        || normalized.contains("ed25519")) {
+                    return UpdateErrorCode.MANIFEST_AUTHENTICATION;
+                }
+                if (normalized.contains("configured") || normalized.contains("configuration")) {
+                    return UpdateErrorCode.CONFIGURATION;
+                }
+            }
+        }
+        return UpdateErrorCode.UNKNOWN;
     }
 
     private UpdateUiState snapshot() {
