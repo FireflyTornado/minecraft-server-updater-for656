@@ -77,7 +77,8 @@ public final class UpdateStateReducer {
                 .downloadProgress(source.getDownloadProgress())
                 .closePolicy(source.getClosePolicy())
                 .summary(source.getSummary())
-                .errorMessage(source.getErrorMessage());
+                .errorMessage(source.getErrorMessage())
+                .errorCode(source.getErrorCode());
     }
 
     private static DownloadProgress toGuiDownloadProgress(
@@ -107,6 +108,7 @@ public final class UpdateStateReducer {
                     .closePolicy(ClosePolicy.EXIT_FAILURE)
                     .summary(summary)
                     .errorMessage(null)
+                    .errorCode(null)
                     .logLines(logLines);
             return;
         }
@@ -122,7 +124,8 @@ public final class UpdateStateReducer {
                 .downloadProgress(DownloadProgress.inactive())
                 .closePolicy(ClosePolicy.ALLOW)
                 .summary(summary)
-                .errorMessage(null);
+                .errorMessage(null)
+                .errorCode(null);
     }
 
     private static void applyFailure(UpdateUiState.Builder builder,
@@ -130,14 +133,18 @@ public final class UpdateStateReducer {
         List<String> logLines = appendLog(current.getLogLines(),
                 "[ERROR] " + failure.getMessage());
         logLines = appendLog(logLines,
-                "[FATAL] Update failed. Minecraft will not start; close the window to exit.");
+                failure.isSkipUpdateAllowed()
+                        ? "[FATAL] Update failed. You may skip only after cached resources are verified."
+                        : "[FATAL] Update failed. Minecraft will not start; close the window to exit.");
         builder.phase(UpdatePhase.ERROR)
                 .status("Update failed")
                 .description("")
                 .overallProgressIndeterminate(false)
                 .downloadProgress(DownloadProgress.inactive())
-                .closePolicy(ClosePolicy.EXIT_FAILURE)
+                .closePolicy(failure.isSkipUpdateAllowed()
+                        ? ClosePolicy.SKIP_OR_EXIT : ClosePolicy.EXIT_FAILURE)
                 .errorMessage(failure.getMessage())
+                .errorCode(failure.getErrorCode())
                 .logLines(logLines);
     }
 
