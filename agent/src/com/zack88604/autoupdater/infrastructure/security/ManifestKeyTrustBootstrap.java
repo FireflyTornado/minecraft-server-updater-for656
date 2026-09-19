@@ -21,13 +21,17 @@ import java.util.concurrent.atomic.AtomicReference;
 
 /** Performs one explicit, user-approved first trust of a server Ed25519 key. */
 public final class ManifestKeyTrustBootstrap {
+    private static final String TRUST_DIRECTORY = ".mc-update";
+    private static final String TRUST_FILE_NAME = "manifest-key-trust.properties";
+
     private ManifestKeyTrustBootstrap() { }
 
     public static ManifestSignatureVerifier resolve(File gameDirectory, ServerClient serverClient,
                                                     String configuredKey, String configuredKeyId)
             throws IOException {
-        if (configuredKey != null && !configuredKey.trim().isEmpty()) {
-            return new ManifestSignatureVerifier(configuredKey, configuredKeyId);
+        ManifestSignatureVerifier localVerifier = resolveOfflineOrNull(gameDirectory, configuredKey, configuredKeyId);
+        if (localVerifier != null) {
+            return localVerifier;
         }
         String descriptor = serverClient.getWithFallback("/api/v3/manifest-public-key");
         String algorithm = JsonParser.getString(descriptor, "algorithm");
@@ -42,6 +46,35 @@ public final class ManifestKeyTrustBootstrap {
         }
         saveTrust(gameDirectory, publicKey, keyId);
         return new ManifestSignatureVerifier(publicKey, keyId);
+    }
+
+    /** Load the persisted key trust needed for offline cache verification. */
+    public static ManifestSignatureVerifier resolveOffline(File gameDirectory, String configuredKey,
+                                                          String configuredKeyId) throws IOException {
+        ManifestSignatureVerifier verifier = resolveOfflineOrNull(gameDirectory, configuredKey, configuredKeyId);
+        if (verifier == null) {
+            throw new IOException("No local manifest key trust is available");
+        }
+        return verifier;
+    }
+
+    private static ManifestSignatureVerifier resolveOfflineOrNull(File gameDirectory, String configuredKey,
+                                                                   String configuredKeyId) throws IOException {
+        TrustedKey trustedKey = loadTrust(gameDirectory);
+        if (trustedKey != null) {
+            ensureConfiguredTrustMatches(trustedKey, configuredKey, configuredKeyId);
+            return new ManifestSignatureVerifier(trustedKey.publicKey, trustedKey.keyId);
+        }
+        if (trim(configuredKey) == null) {
+            return null;
+        }
+        String keyId = trim(configuredKeyId);
+        if (keyId == null) {
+            throw new IOException("A configured manifest public key requires a key id");
+        }
+        saveTrust(gameDirectory, configuredKey, keyId);
+        clearLegacyTrust(gameDirectory, configuredKey);
+        return new ManifestSignatureVerifier(configuredKey, keyId);
     }
 
     private static String fingerprint(String encodedKey) throws IOException {
@@ -86,39 +119,109 @@ public final class ManifestKeyTrustBootstrap {
         return Integer.valueOf(JOptionPane.YES_OPTION).equals(result.get());
     }
 
+    private static TrustedKey loadTrust(File gameDirectory) throws IOException {
+        File trustFile = new File(new File(gameDirectory, TRUST_DIRECTORY), TRUST_FILE_NAME);
+        if (!trustFile.isFile()) {
+            return null;
+        }
+        Properties values = new Properties();
+        try (FileInputStream input = new FileInputStream(trustFile)) {
+            values.load(input);
+        }
+        String publicKey = trim(values.getProperty("public-key"));
+        String keyId = trim(values.getProperty("key-id"));
+        if (publicKey == null || keyId == null) {
+            throw new IOException("Stored manifest key trust is incomplete");
+        }
+        return new TrustedKey(publicKey, keyId);
+    }
+
+    private static void ensureConfiguredTrustMatches(TrustedKey trustedKey, String configuredKey,
+                                                      String configuredKeyId) throws IOException {
+        String publicKey = trim(configuredKey);
+        if (publicKey == null) {
+            return;
+        }
+        String keyId = trim(configuredKeyId);
+        if (!trustedKey.publicKey.equals(publicKey)
+                || (keyId != null && !trustedKey.keyId.equals(keyId))) {
+            throw new IOException("Configured manifest key conflicts with local trusted key");
+        }
+    }
+
     private static void saveTrust(File gameDirectory, String publicKey, String keyId)
             throws IOException {
-        File configuration = new File(gameDirectory, "mc-update.properties");
+        TrustedKey existing = loadTrust(gameDirectory);
+        if (existing != null) {
+            if (!existing.publicKey.equals(publicKey) || !existing.keyId.equals(keyId)) {
+                throw new IOException("A manifest public key already exists; refusing to replace it");
+            }
+            return;
+        }
         Properties values = new Properties();
-        if (configuration.isFile()) {
-            try (FileInputStream input = new FileInputStream(configuration)) { values.load(input); }
+        values.setProperty("public-key", publicKey);
+        values.setProperty("key-id", keyId);
+        File directory = new File(gameDirectory, TRUST_DIRECTORY);
+        writeProperties(new File(directory, TRUST_FILE_NAME), values,
+                "Minecraft Update Agent Manifest Key Trust");
+    }
+
+    private static void clearLegacyTrust(File gameDirectory, String publicKey) throws IOException {
+        File configuration = new File(gameDirectory, "mc-update.properties");
+        if (!configuration.isFile()) {
+            return;
         }
-        // This routine is called only when no key is configured; never replace an existing trust root.
-        String existingKey = values.getProperty("manifest-public-key");
-        if (existingKey != null && !existingKey.trim().isEmpty()) {
-            throw new IOException("A manifest public key already exists; refusing to replace it");
+        Properties values = new Properties();
+        try (FileInputStream input = new FileInputStream(configuration)) {
+            values.load(input);
         }
-        values.setProperty("manifest-public-key", publicKey);
-        values.setProperty("manifest-key-id", keyId);
-        File parent = configuration.getParentFile();
+        if (!publicKey.equals(trim(values.getProperty("manifest-public-key")))) {
+            return;
+        }
+        values.remove("manifest-public-key");
+        values.remove("manifest-key-id");
+        writeProperties(configuration, values, "Minecraft Update Agent Configuration");
+    }
+
+    private static void writeProperties(File destination, Properties values, String comment)
+            throws IOException {
+        File parent = destination.getParentFile();
         if (parent != null && !parent.isDirectory() && !parent.mkdirs() && !parent.isDirectory()) {
-            throw new IOException("Unable to create game configuration directory");
+            throw new IOException("Unable to create updater configuration directory");
         }
         File temporary = File.createTempFile("mc-update-", ".tmp", parent);
         try {
             try (FileOutputStream output = new FileOutputStream(temporary)) {
-                values.store(output, "Minecraft Update Agent Configuration");
+                values.store(output, comment);
                 output.flush();
                 output.getFD().sync();
             }
             try {
-                Files.move(temporary.toPath(), configuration.toPath(), StandardCopyOption.ATOMIC_MOVE,
+                Files.move(temporary.toPath(), destination.toPath(), StandardCopyOption.ATOMIC_MOVE,
                         StandardCopyOption.REPLACE_EXISTING);
             } catch (AtomicMoveNotSupportedException ignored) {
-                Files.move(temporary.toPath(), configuration.toPath(), StandardCopyOption.REPLACE_EXISTING);
+                Files.move(temporary.toPath(), destination.toPath(), StandardCopyOption.REPLACE_EXISTING);
             }
         } finally {
             Files.deleteIfExists(temporary.toPath());
+        }
+    }
+
+    private static String trim(String value) {
+        if (value == null) {
+            return null;
+        }
+        String result = value.trim();
+        return result.isEmpty() ? null : result;
+    }
+
+    private static final class TrustedKey {
+        private final String publicKey;
+        private final String keyId;
+
+        private TrustedKey(String publicKey, String keyId) {
+            this.publicKey = publicKey;
+            this.keyId = keyId;
         }
     }
 }

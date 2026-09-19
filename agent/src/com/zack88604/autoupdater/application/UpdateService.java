@@ -273,7 +273,7 @@ public final class UpdateService {
     }
 
     private ManifestSignatureVerifier manifestVerifier() throws IOException {
-        return new ManifestSignatureVerifier(manifestPublicKey, manifestKeyId);
+        return ManifestKeyTrustBootstrap.resolveOffline(new File(gameDirectory), manifestPublicKey, manifestKeyId);
     }
 
     private ManifestSignatureVerifier manifestVerifier(ServerClient serverClient) throws IOException {
