@@ -6,11 +6,18 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.AtomicMoveNotSupportedException;
+import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.SimpleFileVisitor;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.attribute.BasicFileAttributes;
+import java.nio.file.attribute.FileTime;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.List;
 import java.util.UUID;
 import java.util.jar.JarEntry;
@@ -20,6 +27,7 @@ import java.util.jar.JarFile;
 final class JavaHelperRuntimeInstaller {
 
     private static final String RUNTIME_DIRECTORY_NAME = "gui-runtimes";
+    private static final int RETAINED_OLD_RUNTIME_COUNT = 3;
     private static final long MAX_ARTIFACT_SIZE = 512L * 1024L * 1024L;
 
     private JavaHelperRuntimeInstaller() {
@@ -41,8 +49,101 @@ final class JavaHelperRuntimeInstaller {
                 manifest.getClassPathResources(), runtimeDirectory);
         List<File> modulePath = extractAll(preset, manifest,
                 manifest.getModulePathResources(), runtimeDirectory);
+        markRuntimeUsed(runtimeDirectory);
+        removeExpiredRuntimes(cacheRoot, runtimeDirectory);
         return new PreparedRuntime(manifest.getHelperMainClass(), manifest.getMinimumJavaVersion(),
                 classPath, modulePath, manifest.getAddModules());
+    }
+
+    /**
+     * Keeps the current runtime and the three most recently used older runtimes.
+     * Cleanup is best effort: a stale runtime can be locked by a helper that is
+     * still shutting down, particularly on Windows, and should not prevent a
+     * newly approved helper from starting.
+     */
+    private static void removeExpiredRuntimes(File cacheRoot, File currentRuntime) {
+        File[] entries = cacheRoot.listFiles();
+        if (entries == null) {
+            return;
+        }
+
+        List<File> oldRuntimes = new ArrayList<File>();
+        for (File entry : entries) {
+            if (entry.equals(currentRuntime) || !isRuntimeDirectory(entry)) {
+                continue;
+            }
+            oldRuntimes.add(entry);
+        }
+        Collections.sort(oldRuntimes, new Comparator<File>() {
+            @Override
+            public int compare(File left, File right) {
+                long leftModified = left.lastModified();
+                long rightModified = right.lastModified();
+                if (leftModified != rightModified) {
+                    return leftModified < rightModified ? 1 : -1;
+                }
+                return right.getName().compareTo(left.getName());
+            }
+        });
+
+        for (int index = RETAINED_OLD_RUNTIME_COUNT; index < oldRuntimes.size(); index++) {
+            File expiredRuntime = oldRuntimes.get(index);
+            try {
+                deleteRecursively(expiredRuntime);
+            } catch (IOException exception) {
+                System.err.println("[GUI helper] Unable to remove expired runtime cache "
+                        + expiredRuntime + ": " + exception.getMessage());
+            }
+        }
+    }
+
+    private static boolean isRuntimeDirectory(File directory) {
+        if (!directory.isDirectory() || Files.isSymbolicLink(directory.toPath())) {
+            return false;
+        }
+        String name = directory.getName();
+        if (name.length() != 64) {
+            return false;
+        }
+        for (int index = 0; index < name.length(); index++) {
+            char character = name.charAt(index);
+            if (!((character >= '0' && character <= '9')
+                    || (character >= 'a' && character <= 'f')
+                    || (character >= 'A' && character <= 'F'))) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private static void markRuntimeUsed(File runtimeDirectory) {
+        try {
+            Files.setLastModifiedTime(runtimeDirectory.toPath(),
+                    FileTime.fromMillis(System.currentTimeMillis()));
+        } catch (IOException ignored) {
+            // The cache remains usable; its original modification time is a safe fallback.
+        }
+    }
+
+    private static void deleteRecursively(File directory) throws IOException {
+        Files.walkFileTree(directory.toPath(), new SimpleFileVisitor<Path>() {
+            @Override
+            public FileVisitResult visitFile(Path file, BasicFileAttributes attributes)
+                    throws IOException {
+                Files.delete(file);
+                return FileVisitResult.CONTINUE;
+            }
+
+            @Override
+            public FileVisitResult postVisitDirectory(Path visitedDirectory, IOException exception)
+                    throws IOException {
+                if (exception != null) {
+                    throw exception;
+                }
+                Files.delete(visitedDirectory);
+                return FileVisitResult.CONTINUE;
+            }
+        });
     }
 
     private static List<File> extractAll(GuiPreset preset, JavaHelperRuntimeManifest manifest,
