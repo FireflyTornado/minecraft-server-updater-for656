@@ -65,16 +65,19 @@ public final class ManifestKeyTrustBootstrap {
             ensureConfiguredTrustMatches(trustedKey, configuredKey, configuredKeyId);
             return new ManifestSignatureVerifier(trustedKey.publicKey, trustedKey.keyId);
         }
-        if (trim(configuredKey) == null) {
+        String publicKey = trim(configuredKey);
+        if (publicKey == null) {
             return null;
         }
         String keyId = trim(configuredKeyId);
         if (keyId == null) {
-            throw new IOException("A configured manifest public key requires a key id");
+            keyId = deriveKeyId(publicKey);
         }
-        saveTrust(gameDirectory, configuredKey, keyId);
-        clearLegacyTrust(gameDirectory, configuredKey);
-        return new ManifestSignatureVerifier(configuredKey, keyId);
+        saveTrust(gameDirectory, publicKey, keyId);
+
+        // Do not rewrite mc-update.properties here. It may be managed by the
+        // signed manifest and must remain byte-for-byte stable during updates.
+        return new ManifestSignatureVerifier(publicKey, keyId);
     }
 
     private static String fingerprint(String encodedKey) throws IOException {
@@ -89,6 +92,20 @@ public final class ManifestKeyTrustBootstrap {
             return result.toString();
         } catch (Exception error) {
             throw new IOException("Cannot calculate server public-key fingerprint", error);
+        }
+    }
+
+    private static String deriveKeyId(String encodedKey) throws IOException {
+        try {
+            byte[] publicKeyDer = Base64.getDecoder().decode(encodedKey.trim());
+            byte[] digest = MessageDigest.getInstance("SHA-256").digest(publicKeyDer);
+            StringBuilder keyId = new StringBuilder("ed25519-");
+            for (int index = 0; index < 8; index++) {
+                keyId.append(String.format("%02x", digest[index] & 0xff));
+            }
+            return keyId.toString();
+        } catch (Exception error) {
+            throw new IOException("Cannot derive manifest key id from configured public key", error);
         }
     }
 
@@ -164,23 +181,6 @@ public final class ManifestKeyTrustBootstrap {
         File directory = new File(gameDirectory, TRUST_DIRECTORY);
         writeProperties(new File(directory, TRUST_FILE_NAME), values,
                 "Minecraft Update Agent Manifest Key Trust");
-    }
-
-    private static void clearLegacyTrust(File gameDirectory, String publicKey) throws IOException {
-        File configuration = new File(gameDirectory, "mc-update.properties");
-        if (!configuration.isFile()) {
-            return;
-        }
-        Properties values = new Properties();
-        try (FileInputStream input = new FileInputStream(configuration)) {
-            values.load(input);
-        }
-        if (!publicKey.equals(trim(values.getProperty("manifest-public-key")))) {
-            return;
-        }
-        values.remove("manifest-public-key");
-        values.remove("manifest-key-id");
-        writeProperties(configuration, values, "Minecraft Update Agent Configuration");
     }
 
     private static void writeProperties(File destination, Properties values, String comment)
