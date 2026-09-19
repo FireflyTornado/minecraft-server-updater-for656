@@ -10,7 +10,9 @@ import javax.swing.JComboBox;
 import javax.swing.JLabel;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
+import javax.swing.JTextArea;
 import javax.swing.SwingUtilities;
+import javax.swing.UIManager;
 import java.awt.BorderLayout;
 import java.awt.GraphicsEnvironment;
 import java.awt.GridLayout;
@@ -111,18 +113,18 @@ public final class SwingGuiPresetChooser {
 
     private static boolean showServerRiskDialog(ServerGuiPresetOffer offer,
                                                  String serverUrl) {
-        String message = "The update server offers an external GUI preset:\\n\\n"
-                + offer.getId() + " (" + offer.getVersion() + ")\\n"
-                + "Server: " + serverUrl + "\\n\\n"
+        String message = "The update server offers an external GUI preset:\n\n"
+                + offer.getId() + " (" + offer.getVersion() + ")\n"
+                + "Server: " + serverUrl + "\n\n"
                 + "The downloaded archive matches the descriptor supplied by this update "
                 + "server. Loading it still executes external Java code, which may read or "
                 + "modify files, access the network, or affect the game process. Only trust "
-                + "a server you recognize.\\n\\n"
+                + "a server you recognize.\n\n"
                 + "Trust this server preset identity and load it?";
         Object[] options = {"Trust and load server GUI", "Use built-in Swing"};
-        return JOptionPane.showOptionDialog(null, message, "Server GUI security warning",
-                JOptionPane.DEFAULT_OPTION, JOptionPane.WARNING_MESSAGE, null, options,
-                options[1]) == 0;
+        return JOptionPane.showOptionDialog(null, wrapText(message),
+                "Server GUI security warning", JOptionPane.DEFAULT_OPTION,
+                JOptionPane.WARNING_MESSAGE, null, options, options[1]) == 0;
     }
 
     private static boolean showRiskDialog(GuiPreset preset) {
@@ -132,9 +134,27 @@ public final class SwingGuiPresetChooser {
                 + "your files, access the network, or affect the game process. Only continue "
                 + "if you trust the file and its source.";
         Object[] options = {"Load external GUI", "Use built-in Swing"};
-        return JOptionPane.showOptionDialog(null, message, "External GUI security warning",
-                JOptionPane.DEFAULT_OPTION, JOptionPane.WARNING_MESSAGE, null, options,
-                options[1]) == 0;
+        return JOptionPane.showOptionDialog(null, wrapText(message),
+                "External GUI security warning", JOptionPane.DEFAULT_OPTION,
+                JOptionPane.WARNING_MESSAGE, null, options, options[1]) == 0;
+    }
+
+    /**
+     * Render long warning text in a wrapping text area so the dialog stays on
+     * screen. Long unbroken tokens (absolute paths, URLs) are broken as well.
+     */
+    private static JTextArea wrapText(String message) {
+        JTextArea area = new JTextArea(message);
+        area.setEditable(false);
+        area.setFocusable(false);
+        area.setOpaque(false);
+        area.setBorder(null);
+        area.setLineWrap(true);
+        area.setWrapStyleWord(false);
+        area.setColumns(60);
+        area.setRows(8);
+        area.setFont(UIManager.getFont("Label.font"));
+        return area;
     }
 
     private static void showMessage(final String message, final String title, final int type) {
@@ -144,7 +164,7 @@ public final class SwingGuiPresetChooser {
         onEventThread(new Callable<Boolean>() {
             @Override
             public Boolean call() {
-                JOptionPane.showMessageDialog(null, message, title, type);
+                JOptionPane.showMessageDialog(null, wrapText(message), title, type);
                 return true;
             }
         }, false);
