@@ -7,15 +7,19 @@ import com.zack88604.autoupdater.gui.preset.ServerGuiPresetOffer;
 import javax.swing.BorderFactory;
 import javax.swing.JCheckBox;
 import javax.swing.JComboBox;
+import javax.swing.JDialog;
 import javax.swing.JLabel;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
+import javax.swing.JScrollPane;
 import javax.swing.JTextArea;
 import javax.swing.SwingUtilities;
 import javax.swing.UIManager;
 import java.awt.BorderLayout;
+import java.awt.Dimension;
 import java.awt.GraphicsEnvironment;
 import java.awt.GridLayout;
+import java.awt.Rectangle;
 import java.lang.reflect.InvocationTargetException;
 import java.util.List;
 import java.util.concurrent.Callable;
@@ -122,9 +126,8 @@ public final class SwingGuiPresetChooser {
                 + "a server you recognize.\n\n"
                 + "Trust this server preset identity and load it?";
         Object[] options = {"Trust and load server GUI", "Use built-in Swing"};
-        return JOptionPane.showOptionDialog(null, wrapText(message),
-                "Server GUI security warning", JOptionPane.DEFAULT_OPTION,
-                JOptionPane.WARNING_MESSAGE, null, options, options[1]) == 0;
+        return options[0].equals(showTextDialog(message, "Server GUI security warning",
+                JOptionPane.WARNING_MESSAGE, options, options[1]));
     }
 
     private static boolean showRiskDialog(GuiPreset preset) {
@@ -134,16 +137,15 @@ public final class SwingGuiPresetChooser {
                 + "your files, access the network, or affect the game process. Only continue "
                 + "if you trust the file and its source.";
         Object[] options = {"Load external GUI", "Use built-in Swing"};
-        return JOptionPane.showOptionDialog(null, wrapText(message),
-                "External GUI security warning", JOptionPane.DEFAULT_OPTION,
-                JOptionPane.WARNING_MESSAGE, null, options, options[1]) == 0;
+        return options[0].equals(showTextDialog(message, "External GUI security warning",
+                JOptionPane.WARNING_MESSAGE, options, options[1]));
     }
 
     /**
-     * Render long warning text in a wrapping text area so the dialog stays on
-     * screen. Long unbroken tokens (absolute paths, URLs) are broken as well.
+     * Size the text to its wrapped content, while keeping long messages
+     * scrollable so the dialog buttons remain visible on smaller screens.
      */
-    private static JTextArea wrapText(String message) {
+    private static JScrollPane wrapText(String message) {
         JTextArea area = new JTextArea(message);
         area.setEditable(false);
         area.setFocusable(false);
@@ -151,10 +153,46 @@ public final class SwingGuiPresetChooser {
         area.setBorder(null);
         area.setLineWrap(true);
         area.setWrapStyleWord(false);
-        area.setColumns(60);
-        area.setRows(8);
         area.setFont(UIManager.getFont("Label.font"));
-        return area;
+
+        Rectangle screen = GraphicsEnvironment.getLocalGraphicsEnvironment()
+                .getMaximumWindowBounds();
+        int width = Math.min(area.getFontMetrics(area.getFont()).charWidth('m') * 60,
+                Math.max(200, screen.width - 160));
+        area.setSize(new Dimension(width, Integer.MAX_VALUE));
+        int contentHeight = area.getPreferredSize().height;
+
+        JScrollPane scroll = new JScrollPane(area,
+                JScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED,
+                JScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
+        scroll.setBorder(null);
+        scroll.setOpaque(false);
+        scroll.getViewport().setOpaque(false);
+        scroll.setPreferredSize(new Dimension(width,
+                Math.min(contentHeight, Math.max(60, screen.height - 180))));
+        return scroll;
+    }
+
+    private static Object showTextDialog(String message, String title, int type,
+                                         Object[] options, Object initialValue) {
+        JScrollPane scroll = wrapText(message);
+        JOptionPane pane = new JOptionPane(scroll, type, JOptionPane.DEFAULT_OPTION,
+                null, options, initialValue);
+        JDialog dialog = pane.createDialog(null, title);
+        Rectangle screen = GraphicsEnvironment.getLocalGraphicsEnvironment()
+                .getMaximumWindowBounds();
+        if (dialog.getHeight() > screen.height) {
+            Dimension size = scroll.getPreferredSize();
+            size.height = Math.max(1, size.height - (dialog.getHeight() - screen.height));
+            scroll.setPreferredSize(size);
+            dialog.pack();
+        }
+        dialog.setLocation(screen.x + (screen.width - dialog.getWidth()) / 2,
+                screen.y + (screen.height - dialog.getHeight()) / 2);
+        dialog.setVisible(true);
+        Object value = pane.getValue();
+        dialog.dispose();
+        return value;
     }
 
     private static void showMessage(final String message, final String title, final int type) {
@@ -164,7 +202,7 @@ public final class SwingGuiPresetChooser {
         onEventThread(new Callable<Boolean>() {
             @Override
             public Boolean call() {
-                JOptionPane.showMessageDialog(null, wrapText(message), title, type);
+                showTextDialog(message, title, type, null, null);
                 return true;
             }
         }, false);
