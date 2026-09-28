@@ -231,20 +231,31 @@ final class SwingUpdateView implements UpdateView {
 
     private void showErrorIfNeeded(UpdateUiState state) {
         String errorMessage = state.getErrorMessage();
-        if (errorMessage == null || errorMessage.equals(shownError)) {
+        if (errorMessage == null) {
+            shownError = null;
+            return;
+        }
+        if (errorMessage.equals(shownError)) {
             return;
         }
         shownError = errorMessage;
         if (state.getClosePolicy() == ClosePolicy.SKIP_OR_EXIT) {
-            int choice = JOptionPane.showConfirmDialog(frame,
-                    errorMessage + "\n\nSkip this update? Minecraft starts only if the signed cached "
-                            + "manifest verifies every local resource.",
+            Object[] options = { "Use trusted version", "Retry update", "Exit" };
+            int choice = JOptionPane.showOptionDialog(frame,
+                    errorMessage + "\n\nRestore the last trusted version, retry using a fresh "
+                            + "manifest while keeping installed files, or exit. Recovery starts "
+                            + "Minecraft only after verifying the signed cache and local files.",
                     "Update Error (" + state.getErrorCode() + ")",
-                    JOptionPane.YES_NO_OPTION, JOptionPane.ERROR_MESSAGE);
-            if (choice == JOptionPane.YES_OPTION) {
+                    JOptionPane.DEFAULT_OPTION, JOptionPane.ERROR_MESSAGE, null, options, options[0]);
+            if (choice == 0) {
                 actions.requestSkipUpdate();
-            } else {
+            } else if (choice == 1) {
+                shownError = null;
+                actions.requestRetryUpdate();
+            } else if (choice == 2) {
                 actions.requestClose();
+            } else {
+                shownError = null;
             }
             return;
         }

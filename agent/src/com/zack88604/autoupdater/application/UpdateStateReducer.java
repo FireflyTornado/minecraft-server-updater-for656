@@ -134,7 +134,7 @@ public final class UpdateStateReducer {
                 "[ERROR] " + failure.getMessage());
         logLines = appendLog(logLines,
                 failure.isSkipUpdateAllowed()
-                        ? "[FATAL] Update failed. You may skip only after cached resources are verified."
+                        ? "[FATAL] Update failed. Retry, restore verified cached resources, or exit."
                         : "[FATAL] Update failed. Minecraft will not start; close the window to exit.");
         builder.phase(UpdatePhase.ERROR)
                 .status("Update failed")

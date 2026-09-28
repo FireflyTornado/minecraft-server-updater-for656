@@ -39,6 +39,14 @@ public interface UpdateViewActions {
         requestClose();
     }
 
+    /**
+     * Retry a failed update using a freshly fetched manifest, keeping installed
+     * files and the original rollback backups. Valid only for SKIP_OR_EXIT.
+     */
+    default void requestRetryUpdate() {
+        // Older controllers leave the failed update open rather than exit.
+    }
+
     /** The native window has finished closing. */
     void notifyWindowClosed();
 }

@@ -212,6 +212,9 @@ public final class JavaHelperGuiAdapter implements GuiAdapter {
             case REQUEST_SKIP_UPDATE:
                 currentActions.requestSkipUpdate();
                 break;
+            case REQUEST_RETRY_UPDATE:
+                currentActions.requestRetryUpdate();
+                break;
             case WINDOW_CLOSED:
                 helperWindowClosed = true;
                 currentActions.notifyWindowClosed();

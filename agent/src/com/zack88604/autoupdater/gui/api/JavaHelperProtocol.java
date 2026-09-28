@@ -29,6 +29,7 @@ public final class JavaHelperProtocol {
         CANCEL_CLOSE_CONFIRMATION,
         REQUEST_CLOSE,
         REQUEST_SKIP_UPDATE,
+        REQUEST_RETRY_UPDATE,
         WINDOW_CLOSED
     }
 

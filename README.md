@@ -139,6 +139,11 @@ stop the update immediately, preserving the failed file's progress and preventin
 later downloads, stale-file cleanup, or trusted-cache writes. Connect/read timeouts
 remain 10/60 seconds. Resume currently applies within one run, not across restarts.
 
+Failed updates offer “Use trusted version”, “Retry update”, and “Exit”. Manual retry
+fetches a fresh manifest, keeps installed changes, and skips files that still match
+their checksums. All attempts retain the original rollback backups until success,
+recovery, or exit.
+
 After a complete update, the agent verifies every manifest resource locally and atomically caches the already Ed25519-signed v3 envelope in `.mc-update/signed-manifest-cache.properties`. When the user confirms skipping an in-progress update, the agent first rolls back that run, then re-verifies the cached Ed25519 signature, expiry, server identity, manifest hash, and SHA-256/size of every listed local resource. Any missing, changed, expired, or manually modified cache entry blocks Minecraft startup.
 
 ## API

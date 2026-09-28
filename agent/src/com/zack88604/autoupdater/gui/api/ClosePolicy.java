@@ -14,6 +14,7 @@ public enum ClosePolicy {
      * The update failed before completion. The GUI must offer the user a choice
      * to skip the update; the controller will restore changed files and verify
      * the signed cached manifest before it permits Minecraft to start.
+     * The GUI may also offer a retry, keeping installed files and backups.
      */
     SKIP_OR_EXIT,
     /** The update failed; closing exits without launching Minecraft. */

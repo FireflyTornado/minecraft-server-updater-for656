@@ -77,6 +77,11 @@ public final class JavaHelperSession {
         send(JavaHelperProtocol.HelperAction.REQUEST_SKIP_UPDATE);
     }
 
+    /** Retry using a fresh manifest without rolling back installed files. */
+    public void requestRetryUpdate() {
+        send(JavaHelperProtocol.HelperAction.REQUEST_RETRY_UPDATE);
+    }
+
     /** Tell the updater that the helper's native window is now closed. */
     public void notifyWindowClosed() {
         send(JavaHelperProtocol.HelperAction.WINDOW_CLOSED);

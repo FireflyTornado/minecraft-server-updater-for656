@@ -92,9 +92,14 @@ public final class UpdateService {
         Objects.requireNonNull(listener, "listener");
         Objects.requireNonNull(control, "control");
 
-        FileTransaction transaction = new FileTransaction();
+        FileTransaction transaction;
         synchronized (transactionLock) {
-            activeTransaction = transaction;
+            // Retries keep installed files and the originals from the first run.
+            // The controller serializes attempts before entering this method.
+            if (activeTransaction == null) {
+                activeTransaction = new FileTransaction();
+            }
+            transaction = activeTransaction;
         }
 
         EventRelay relay = new EventRelay(listener, control);
@@ -176,10 +181,10 @@ public final class UpdateService {
             // Keep the transaction available for the controller's rollback step.
             throw cancellation;
         } catch (Exception exception) {
-            // Preserve originals until the controller accepts skip or exit.
+            // Preserve originals across retries until success, rollback or exit.
             throw exception;
         } catch (Error error) {
-            // Preserve originals until the controller accepts skip or exit.
+            // Preserve originals across retries until success, rollback or exit.
             throw error;
         } finally {
             relay.flushLogs();

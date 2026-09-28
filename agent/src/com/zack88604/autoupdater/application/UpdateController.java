@@ -26,9 +26,9 @@ public final class UpdateController implements UpdateViewActions {
     private final UpdateService service;
     private final GuiAdapter guiAdapter;
     private final CountDownLatch launchLatch;
-    private final CountDownLatch workerFinished = new CountDownLatch(1);
+    private CountDownLatch workerFinished = new CountDownLatch(1);
     private final boolean debug;
-    private final UpdateExecutionControl executionControl = new UpdateExecutionControl();
+    private UpdateExecutionControl executionControl = new UpdateExecutionControl();
     private final LatestStateRenderer stateRenderer;
     private final Object stateLock = new Object();
     private final Object closeLock = new Object();
@@ -39,6 +39,7 @@ public final class UpdateController implements UpdateViewActions {
     private boolean started;
     private boolean confirmationPaused;
     private boolean closeRequested;
+    private boolean retryRequested;
 
     public UpdateController(UpdateService service, GuiAdapter guiAdapter,
                             CountDownLatch launchLatch, boolean debug) {
@@ -75,7 +76,7 @@ public final class UpdateController implements UpdateViewActions {
             return;
         }
         synchronized (closeLock) {
-            if (closeRequested || confirmationPaused) {
+            if (closeRequested || retryRequested || confirmationPaused) {
                 return;
             }
             confirmationPaused = true;
@@ -96,78 +97,127 @@ public final class UpdateController implements UpdateViewActions {
 
     @Override
     public void requestClose() {
-        ClosePolicy currentClosePolicy = closePolicy;
-        if (currentClosePolicy == ClosePolicy.EXIT_FAILURE) {
-            exitAfterFailure();
-            return;
-        }
+        synchronized (closeLock) {
+            ClosePolicy currentClosePolicy = closePolicy;
+            if (currentClosePolicy == ClosePolicy.EXIT_FAILURE) {
+                if (markCloseRequested(false)) {
+                    exitAfterFailure();
+                }
+                return;
+            }
 
-        if (currentClosePolicy == ClosePolicy.SKIP_OR_EXIT) {
+            if (currentClosePolicy == ClosePolicy.SKIP_OR_EXIT) {
+                if (markCloseRequested(false)) {
+                    exitAfterFailure();
+                }
+                return;
+            }
+
+            if (currentClosePolicy == ClosePolicy.CONFIRM) {
+                if (markCloseRequested(true)) {
+                    rollbackThenVerifyCachedManifestAndLaunch(false);
+                }
+                return;
+            }
+
             if (markCloseRequested(false)) {
-                exitAfterFailure();
+                launchLatch.countDown();
+                closeView();
             }
-            return;
-        }
-
-        if (currentClosePolicy == ClosePolicy.CONFIRM) {
-            if (markCloseRequested(true)) {
-                rollbackThenVerifyCachedManifestAndLaunch(false);
-            }
-            return;
-        }
-
-        if (markCloseRequested(false)) {
-            launchLatch.countDown();
-            closeView();
         }
     }
 
     @Override
     public void requestSkipUpdate() {
-        if (closePolicy != ClosePolicy.SKIP_OR_EXIT) {
-            return;
-        }
-        if (markCloseRequested(false)) {
-            rollbackThenVerifyCachedManifestAndLaunch(false);
+        synchronized (closeLock) {
+            if (closePolicy != ClosePolicy.SKIP_OR_EXIT) {
+                return;
+            }
+            if (markCloseRequested(false)) {
+                rollbackThenVerifyCachedManifestAndLaunch(false);
+            }
         }
     }
 
     @Override
-    public void notifyWindowClosed() {
-        ClosePolicy currentClosePolicy = closePolicy;
-        if (currentClosePolicy == ClosePolicy.EXIT_FAILURE) {
-            exitAfterFailure();
-            return;
-        }
-
-        if (currentClosePolicy == ClosePolicy.SKIP_OR_EXIT) {
-            if (markCloseRequested(false)) {
-                exitAfterFailure();
-            }
-            return;
-        }
-
-        if (currentClosePolicy == ClosePolicy.CONFIRM) {
-            if (markCloseRequested(true)) {
-                rollbackThenVerifyCachedManifestAndLaunch(true);
-            }
-            return;
-        }
-
+    public void requestRetryUpdate() {
+        final CountDownLatch previousWorker;
         synchronized (closeLock) {
-            if (closeRequested) {
+            if (closePolicy != ClosePolicy.SKIP_OR_EXIT || closeRequested || retryRequested) {
                 return;
             }
-            closeRequested = true;
-            confirmationPaused = false;
-            executionControl.resume();
+            retryRequested = true;
+            previousWorker = workerFinished;
         }
-        launchLatch.countDown();
+        Thread retry = new Thread(() -> {
+            try {
+                previousWorker.await();
+                synchronized (closeLock) {
+                    workerFinished = new CountDownLatch(1);
+                    executionControl = new UpdateExecutionControl();
+                    UpdateUiState next;
+                    synchronized (stateLock) {
+                        state = UpdateUiState.builder()
+                                .logLines(state.getLogLines())
+                                .serverUrls(state.getServerUrls())
+                                .currentServer(state.getCurrentServer())
+                                .build();
+                        state = UpdateStateReducer.reduce(state,
+                                new UpdateEvent.LogMessage("[INFO] Retrying update; keeping installed files."));
+                        closePolicy = state.getClosePolicy();
+                        next = state;
+                    }
+                    retryRequested = false;
+                    stateRenderer.submit(next);
+                    startWorker();
+                }
+            } catch (InterruptedException exception) {
+                Thread.currentThread().interrupt();
+                synchronized (closeLock) {
+                    retryRequested = false;
+                    onUpdateEvent(new UpdateEvent.Failed("Unable to retry the update: "
+                            + exception, exception, UpdateErrorCode.UNKNOWN));
+                }
+            }
+        }, "update-retry");
+        retry.setDaemon(true);
+        retry.start();
+    }
+
+    @Override
+    public void notifyWindowClosed() {
+        synchronized (closeLock) {
+            ClosePolicy currentClosePolicy = closePolicy;
+            if (currentClosePolicy == ClosePolicy.EXIT_FAILURE) {
+                if (markCloseRequested(false)) {
+                    exitAfterFailure();
+                }
+                return;
+            }
+
+            if (currentClosePolicy == ClosePolicy.SKIP_OR_EXIT) {
+                if (markCloseRequested(false)) {
+                    exitAfterFailure();
+                }
+                return;
+            }
+
+            if (currentClosePolicy == ClosePolicy.CONFIRM) {
+                if (markCloseRequested(true)) {
+                    rollbackThenVerifyCachedManifestAndLaunch(true);
+                }
+                return;
+            }
+
+            if (markCloseRequested(false)) {
+                launchLatch.countDown();
+            }
+        }
     }
 
     private boolean markCloseRequested(boolean cancelUpdate) {
         synchronized (closeLock) {
-            if (closeRequested) {
+            if (closeRequested || retryRequested) {
                 return false;
             }
             closeRequested = true;
@@ -182,9 +232,10 @@ public final class UpdateController implements UpdateViewActions {
     }
 
     private void exitAfterFailure() {
+        final CountDownLatch finished = workerFinished;
         Thread exit = new Thread(() -> {
             try {
-                workerFinished.await();
+                finished.await();
                 service.discardFailedUpdate();
             } catch (InterruptedException exception) {
                 Thread.currentThread().interrupt();
@@ -198,9 +249,10 @@ public final class UpdateController implements UpdateViewActions {
     }
 
     private void rollbackThenVerifyCachedManifestAndLaunch(boolean viewAlreadyClosed) {
+        final CountDownLatch finished = workerFinished;
         Thread rollback = new Thread(() -> {
             try {
-                workerFinished.await();
+                finished.await();
                 service.rollbackCancelledUpdate();
                 service.verifyCachedManifest(this::onUpdateEvent);
                 launchLatch.countDown();
@@ -234,9 +286,11 @@ public final class UpdateController implements UpdateViewActions {
     }
 
     private void startWorker() {
+        final CountDownLatch finished = workerFinished;
+        final UpdateExecutionControl control = executionControl;
         Thread worker = new Thread(() -> {
             try {
-                UpdateResult result = service.run(this::onUpdateEvent, executionControl);
+                UpdateResult result = service.run(this::onUpdateEvent, control);
                 onUpdateEvent(new UpdateEvent.Completed(result));
             } catch (UpdateExecutionControl.CancelledException ignored) {
                 // The rollback thread restores the transaction before Minecraft starts.
@@ -245,7 +299,7 @@ public final class UpdateController implements UpdateViewActions {
                 onUpdateEvent(new UpdateEvent.Failed("Update error: " + message, cause,
                         classifyError(cause)));
             } finally {
-                workerFinished.countDown();
+                finished.countDown();
             }
         }, "update-worker");
         worker.setDaemon(true);
