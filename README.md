@@ -129,6 +129,16 @@ When no public key is configured, the client shows a one-time confirmation with 
 
 ## Safe skip update
 
+Downloads emit network-wait feedback after about five seconds without new data.
+A single source is tried at most three times; multiple sources are visited in order
+with enough attempts to cover every configured source. Retries first request the
+temporary file's current byte offset, validate `Content-Range`, and send `If-Range`
+when a strong ETag is available. Full responses reset progress and overwrite the
+temporary file; size or SHA-256 failures restart with fresh bytes. Exhausted retries
+stop the update immediately, preserving the failed file's progress and preventing
+later downloads, stale-file cleanup, or trusted-cache writes. Connect/read timeouts
+remain 10/60 seconds. Resume currently applies within one run, not across restarts.
+
 After a complete update, the agent verifies every manifest resource locally and atomically caches the already Ed25519-signed v3 envelope in `.mc-update/signed-manifest-cache.properties`. When the user confirms skipping an in-progress update, the agent first rolls back that run, then re-verifies the cached Ed25519 signature, expiry, server identity, manifest hash, and SHA-256/size of every listed local resource. Any missing, changed, expired, or manually modified cache entry blocks Minecraft startup.
 
 ## API

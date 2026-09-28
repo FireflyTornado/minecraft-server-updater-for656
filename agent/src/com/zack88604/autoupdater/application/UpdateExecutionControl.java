@@ -34,6 +34,10 @@ public final class UpdateExecutionControl {
         return cancelled;
     }
 
+    public synchronized boolean isPaused() {
+        return paused;
+    }
+
     /**
      * Block while paused, or stop the worker when cancellation is requested.
      *

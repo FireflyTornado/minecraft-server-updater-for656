@@ -472,6 +472,10 @@ DownloadProgress.active(String path, Kind kind, long downloadedBytes,
 `Kind`：`FILE`（受管资源）、`UPDATER`（新版 `UpdateAgent_core.jar`）、`GUI_RUNTIME`
 （为 GUI 运行时产物预留）。
 
+下载失败时，`ERROR` 状态保留当前文件的 active 进度快照，并将速度置为 `0`。
+适配器应以 `phase` 判断下载已经停止，展示快照中的路径和字节数，避免恢复更早的 UI 缓存。
+等待网络、重试和验证提示通过现有 `description` 字段传递；收到新字节后清除等待/重试提示，恢复普通下载状态。续传方式只保留在日志中。本次没有更改 V2 协议。
+
 ### 4.11 `UpdateSummary`（不可变）
 
 | 方法 | 含义 |

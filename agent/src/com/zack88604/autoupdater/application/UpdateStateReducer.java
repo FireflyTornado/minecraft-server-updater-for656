@@ -140,12 +140,17 @@ public final class UpdateStateReducer {
                 .status("Update failed")
                 .description("")
                 .overallProgressIndeterminate(false)
-                .downloadProgress(DownloadProgress.inactive())
+                .downloadProgress(stoppedDownload(current.getDownloadProgress()))
                 .closePolicy(failure.isSkipUpdateAllowed()
                         ? ClosePolicy.SKIP_OR_EXIT : ClosePolicy.EXIT_FAILURE)
                 .errorMessage(failure.getMessage())
                 .errorCode(failure.getErrorCode())
                 .logLines(logLines);
+    }
+
+    private static DownloadProgress stoppedDownload(DownloadProgress progress) {
+        return progress.isActive() ? DownloadProgress.active(progress.getPath(), progress.getKind(),
+                progress.getDownloadedBytes(), progress.getTotalBytes(), 0) : progress;
     }
 
     private static List<String> appendLog(List<String> current, String message) {

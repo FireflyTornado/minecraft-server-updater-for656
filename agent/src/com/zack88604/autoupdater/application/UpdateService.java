@@ -137,7 +137,6 @@ public final class UpdateService {
             int total = manifestFiles.size();
             int checked = 0;
             int updated = 0;
-            int failed = 0;
 
             for (FileEntry entry : manifestFiles) {
                 relay.checkpoint();
@@ -146,20 +145,13 @@ public final class UpdateService {
                 File localFile = fileManager.resolveManagedFile(relativePath);
                 if (localFile == null) {
                     relay.log("  [REJECT] " + relativePath + " (unsafe manifest path)");
-                    failed++;
-                    relay.status(UpdatePhase.CHECKING,
-                            "Rejected unsafe path: " + checked + "/" + total, null, false);
-                    relay.overallProgress(total > 0 ? checked * 95 / total : 100);
-                    continue;
+                    throw new IOException("Unsafe manifest path: " + relativePath);
                 }
 
                 boolean needsDownload = needsDownload(relay, localFile, entry);
                 if (needsDownload) {
-                    if (updateFile(relay, serverClient, localFile, entry, transaction)) {
-                        updated++;
-                    } else {
-                        failed++;
-                    }
+                    updateFile(relay, serverClient, localFile, entry, transaction);
+                    updated++;
                 }
 
                 relay.status(UpdatePhase.CHECKING,
@@ -175,7 +167,7 @@ public final class UpdateService {
 
             verifyManifestResources(relay, manifest, "Verifying updated resources before caching...");
             relay.checkpoint();
-            UpdateResult result = new UpdateResult(updated, failed);
+            UpdateResult result = new UpdateResult(updated, 0);
             transaction.commit();
             clearActiveTransaction(transaction);
             saveVerifiedManifestCache(relay, signedEnvelope);
@@ -301,9 +293,9 @@ public final class UpdateService {
         return false;
     }
 
-    private boolean updateFile(EventRelay relay, ServerClient serverClient,
+    private void updateFile(EventRelay relay, ServerClient serverClient,
                                File localFile, FileEntry entry,
-                               FileTransaction transaction) {
+                               FileTransaction transaction) throws IOException {
         String relativePath = entry.getPath();
         relay.status(UpdatePhase.DOWNLOADING, "Downloading: " + relativePath, null, false);
         relay.log("         -> Downloading " + relativePath + "...");
@@ -317,36 +309,28 @@ public final class UpdateService {
         long downloadStartedAt = System.currentTimeMillis();
         boolean updated = false;
         try {
-            boolean downloaded = serverClient.downloadWithFallback(
-                    "/api/files/" + ServerClient.encodePath(relativePath), temporaryFile);
+            serverClient.downloadWithFallback(
+                    "/api/files/" + ServerClient.encodePath(relativePath), temporaryFile,
+                    entry.getSize(), entry.getSha256());
             relay.checkpoint();
-
-            if (downloaded) {
-                String downloadedHash = fileManager.sha256(temporaryFile, relay::checkpoint);
-                if (downloadedHash != null && downloadedHash.equals(entry.getSha256())) {
-                    try {
-                        relay.checkpoint();
-                        fileManager.replaceDownloadedFile(temporaryFile, localFile, transaction);
-                        long elapsed = System.currentTimeMillis() - downloadStartedAt;
-                        double averageSpeed = elapsed > 0
-                                ? entry.getSize() * 1000.0 / elapsed : 0;
-                        relay.log("         -> Done (" + entry.getSize() + " bytes, "
-                                + formatSpeed(averageSpeed) + ")");
-                        updated = true;
-                    } catch (IOException e) {
-                        relay.log("  [FAIL]  " + relativePath + ": cannot replace file ("
-                                + e.getMessage() + ")");
-                    }
-                } else {
-                    relay.log("  [FAIL]  " + relativePath + ": hash mismatch after download");
-                }
-            } else {
-                relay.log("  [FAIL]  " + relativePath + ": download failed");
-            }
-            return updated;
+            fileManager.replaceDownloadedFile(temporaryFile, localFile, transaction);
+            long elapsed = System.currentTimeMillis() - downloadStartedAt;
+            double averageSpeed = elapsed > 0 ? entry.getSize() * 1000.0 / elapsed : 0;
+            relay.log("         -> Done (" + entry.getSize() + " bytes, " + formatSpeed(averageSpeed) + ")");
+            updated = true;
+        } catch (ServerClient.DownloadFailedException failure) {
+            String message = "File download failed: " + relativePath + " (reason: "
+                    + failure.getReason().name() + "; attempts: " + failure.getAttempts() + ")";
+            relay.log("  [FAIL]  " + message + ": " + failure.getMessage());
+            throw new IOException(message, failure);
+        } catch (IOException failure) {
+            String message = "File installation failed: " + relativePath;
+            relay.log("  [FAIL]  " + message + ": " + failure.getMessage());
+            throw new IOException(message, failure);
         } finally {
             try {
-                relay.finishDownload();
+                // An error retains this file's actual progress for the terminal snapshot.
+                if (updated) relay.finishDownload();
             } finally {
                 if (!updated) {
                     temporaryFile.delete();
@@ -408,25 +392,19 @@ public final class UpdateService {
         relay.startDownload(currentJar.getName(), UpdateEvent.DownloadKind.UPDATER, agent.getSize());
         boolean keepDownloadedAgent = false;
         try {
-            boolean downloaded = serverClient.downloadWithFallback(agent.getPath(), newJar);
+            serverClient.downloadWithFallback(agent.getPath(), newJar, agent.getSize(), agent.getSha256());
             relay.checkpoint();
-
-            if (!downloaded) {
-                relay.log("  [FAIL]  Agent download failed");
-                return;
-            }
-
-            String downloadedHash = fileManager.sha256(newJar, relay::checkpoint);
-            if (downloadedHash == null || !downloadedHash.equals(agent.getSha256())) {
-                relay.log("  [FAIL]  Agent hash mismatch after download");
-                return;
-            }
 
             keepDownloadedAgent = true;
             relay.log("  [OK]    Agent downloaded, will replace on next restart");
+        } catch (ServerClient.DownloadFailedException failure) {
+            String message = "File download failed: " + currentJar.getName() + " (reason: "
+                    + failure.getReason().name() + "; attempts: " + failure.getAttempts() + ")";
+            relay.log("  [FAIL]  " + message + ": " + failure.getMessage());
+            throw new IOException(message, failure);
         } finally {
             try {
-                relay.finishDownload();
+                if (keepDownloadedAgent) relay.finishDownload();
             } finally {
                 if (!keepDownloadedAgent) {
                     newJar.delete();
@@ -499,13 +477,13 @@ public final class UpdateService {
             control.checkpoint();
         }
 
-        void emit(UpdateEvent event) {
+        synchronized void emit(UpdateEvent event) {
             flushLogs();
             checkpoint();
             listener.onUpdateEvent(event);
         }
 
-        void log(String message) {
+        synchronized void log(String message) {
             checkpoint();
             pendingLogs.add(message);
             if (pendingLogs.size() >= LOG_BATCH_SIZE) {
@@ -513,7 +491,7 @@ public final class UpdateService {
             }
         }
 
-        void flushLogs() {
+        synchronized void flushLogs() {
             if (pendingLogs.isEmpty()) {
                 return;
             }
@@ -537,7 +515,7 @@ public final class UpdateService {
             emit(new UpdateEvent.OverallProgressChanged(percentage));
         }
 
-        void startDownload(String resource, UpdateEvent.DownloadKind kind, long expectedTotalBytes) {
+        synchronized void startDownload(String resource, UpdateEvent.DownloadKind kind, long expectedTotalBytes) {
             this.resource = resource;
             this.downloadKind = kind;
             this.expectedTotalBytes = expectedTotalBytes;
@@ -547,7 +525,7 @@ public final class UpdateService {
                     resource, kind, expectedTotalBytes, 0, 0));
         }
 
-        void finishDownload() {
+        synchronized void finishDownload() {
             emit(UpdateEvent.DownloadProgressChanged.inactive());
             resource = null;
             downloadKind = null;
@@ -567,7 +545,7 @@ public final class UpdateService {
         }
 
         @Override
-        public void onDownloadProgress(long totalBytes, long downloadedBytes) {
+        public synchronized void onDownloadProgress(long totalBytes, long downloadedBytes) {
             long effectiveTotal = totalBytes > 0 ? totalBytes : expectedTotalBytes;
             long now = System.currentTimeMillis();
             long elapsed = now - lastDownloadTime;
@@ -578,6 +556,35 @@ public final class UpdateService {
             lastDownloadTime = now;
             emit(UpdateEvent.DownloadProgressChanged.active(
                     resource, downloadKind, effectiveTotal, downloadedBytes, bytesPerSecond));
+        }
+
+        @Override
+        public boolean isPaused() {
+            return control.isPaused() || control.isCancelled();
+        }
+
+        @Override
+        public synchronized void onDownloadState(ServerClient.DownloadState state, int attempt, int maximum, long value) {
+            if (resource == null || isPaused()) return;
+            String description;
+            switch (state) {
+                case WAITING: description = "Transfer waiting: " + value; break;
+                case RETRYING: description = "Transfer retrying: " + attempt + "/" + maximum; break;
+                // Keep retry/wait feedback until real bytes arrive. Recovery method belongs in the log.
+                case RESUMING: case RESTARTING: return;
+                case VERIFYING: description = "Transfer verifying"; break;
+                default: description = null;
+            }
+            // The watchdog must never wait at a pause checkpoint while holding the feedback lock.
+            if (state == ServerClient.DownloadState.WAITING || state == ServerClient.DownloadState.RETRYING
+                    || state == ServerClient.DownloadState.VERIFYING) {
+                lastDownloadTime = System.currentTimeMillis();
+                listener.onUpdateEvent(UpdateEvent.DownloadProgressChanged.active(
+                        resource, downloadKind, expectedTotalBytes, lastDownloadBytes, 0));
+            }
+            listener.onUpdateEvent(new UpdateEvent.StatusChanged(
+                    downloadKind == UpdateEvent.DownloadKind.UPDATER ? UpdatePhase.PREPARING : UpdatePhase.DOWNLOADING,
+                    "Downloading: " + resource, description, false));
         }
     }
 }

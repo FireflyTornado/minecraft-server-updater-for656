@@ -179,7 +179,9 @@ final class SwingUpdateView implements UpdateView {
     }
 
     private void renderStatus(UpdateUiState state) {
-        statusLabel.setText(state.getStatus());
+        String description = state.getDescription();
+        statusLabel.setText(description != null && description.startsWith("Transfer ")
+                ? description : state.getStatus());
     }
 
     private void renderOverallProgress(UpdateUiState state) {
@@ -254,6 +256,7 @@ final class SwingUpdateView implements UpdateView {
         if (bytesPerSecond < 0) {
             bytesPerSecond = 0;
         }
+        if (bytesPerSecond == 0) return "0 KB/s";
         if (bytesPerSecond >= 1_000_000_000) {
             return String.format("%.1f GB/s", bytesPerSecond / 1_000_000_000);
         }

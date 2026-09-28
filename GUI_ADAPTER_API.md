@@ -487,6 +487,13 @@ DownloadProgress.active(String path, Kind kind, long downloadedBytes,
 `Kind`: `FILE` (managed resource), `UPDATER` (new `UpdateAgent_core.jar`),
 `GUI_RUNTIME` (reserved for GUI runtime artifacts).
 
+On a download failure, `ERROR` retains the current file's active progress snapshot
+with speed set to `0`. Use `phase` to determine that downloading has stopped and
+display the snapshot's path and byte count instead of an older view cache. Network
+waiting, retry, and verification feedback uses the existing `description` field.
+New bytes clear waiting/retry feedback and restore ordinary downloading; recovery
+details remain in the log. The V2 protocol is unchanged.
+
 ### 4.11 `UpdateSummary` (immutable)
 
 | Method | Meaning |

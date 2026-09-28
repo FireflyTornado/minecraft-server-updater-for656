@@ -1,0 +1,35 @@
+# Agent build outputs
+/agent/build/
+/agent/UpdateAgent.jar
+/agent/UpdateAgent_core.jar
+*.class
+
+# Local tests, probes, and demonstration artifacts
+test/
+tests/
+build-test/
+build-presets/
+test-results/
+.test-work/
+/diagnostics/
+/artifacts/
+
+# Python caches and local environments
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Temporary files, logs, and JVM crash artifacts
+*.tmp
+*.log
+hs_err_pid*.log
+replay_pid*.log
+*.hprof
+
+# Editor and OS metadata
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

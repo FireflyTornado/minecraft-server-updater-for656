@@ -293,6 +293,13 @@ public final class UpdateController implements UpdateViewActions {
 
     private static UpdateErrorCode classifyError(Throwable cause) {
         for (Throwable current = cause; current != null; current = current.getCause()) {
+            if (current instanceof com.zack88604.autoupdater.infrastructure.http.ServerClient.DownloadFailedException) {
+                switch (((com.zack88604.autoupdater.infrastructure.http.ServerClient.DownloadFailedException) current).getReason()) {
+                    case TIMEOUT: case NETWORK: case HTTP: return UpdateErrorCode.NETWORK;
+                    case LOCAL_IO: return UpdateErrorCode.FILESYSTEM;
+                    default: return UpdateErrorCode.UNKNOWN;
+                }
+            }
             if (current instanceof java.net.ConnectException
                     || current instanceof java.net.SocketTimeoutException
                     || current instanceof java.net.NoRouteToHostException
