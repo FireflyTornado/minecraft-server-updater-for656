@@ -4,6 +4,7 @@ import com.zack88604.autoupdater.domain.AgentArtifact;
 import com.zack88604.autoupdater.domain.FileEntry;
 import com.zack88604.autoupdater.domain.Manifest;
 import com.zack88604.autoupdater.domain.UpdateResult;
+import com.zack88604.autoupdater.config.DownloadSettings;
 import com.zack88604.autoupdater.gui.api.UpdatePhase;
 import com.zack88604.autoupdater.infrastructure.files.FileManager;
 import com.zack88604.autoupdater.infrastructure.cache.SignedManifestCacheStore;
@@ -38,6 +39,7 @@ public final class UpdateService {
     private final SignedManifestCacheStore manifestCache;
     private final String manifestPublicKey;
     private final String manifestKeyId;
+    private final DownloadSettings downloadSettings;
     private final Object transactionLock = new Object();
 
     private FileTransaction activeTransaction;
@@ -48,6 +50,12 @@ public final class UpdateService {
 
     public UpdateService(String gameDirectory, List<String> serverUrls,
                          String manifestPublicKey, String manifestKeyId) {
+        this(gameDirectory, serverUrls, manifestPublicKey, manifestKeyId, DownloadSettings.defaults());
+    }
+
+    public UpdateService(String gameDirectory, List<String> serverUrls,
+                         String manifestPublicKey, String manifestKeyId,
+                         DownloadSettings downloadSettings) {
         this.gameDirectory = Objects.requireNonNull(gameDirectory, "gameDirectory");
         Objects.requireNonNull(serverUrls, "serverUrls");
         this.serverUrls = Collections.unmodifiableList(new ArrayList<>(serverUrls));
@@ -55,6 +63,7 @@ public final class UpdateService {
         this.manifestCache = new SignedManifestCacheStore(new File(gameDirectory));
         this.manifestPublicKey = manifestPublicKey;
         this.manifestKeyId = manifestKeyId;
+        this.downloadSettings = Objects.requireNonNull(downloadSettings, "downloadSettings");
     }
 
     /** Return configured server URLs in failover priority order. */
@@ -104,7 +113,7 @@ public final class UpdateService {
 
         EventRelay relay = new EventRelay(listener, control);
         try {
-            ServerClient serverClient = new ServerClient(serverUrls, relay);
+            ServerClient serverClient = new ServerClient(serverUrls, relay, downloadSettings);
 
             relay.emit(new UpdateEvent.ServerChanged(serverUrls, serverClient.getCurrentServer()));
             relay.log("Servers (" + serverUrls.size() + "):");

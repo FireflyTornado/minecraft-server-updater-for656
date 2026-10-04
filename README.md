@@ -130,14 +130,19 @@ When no public key is configured, the client shows a one-time confirmation with 
 ## Safe skip update
 
 Downloads emit network-wait feedback after about five seconds without new data.
-A single source is tried at most three times; multiple sources are visited in order
-with enough attempts to cover every configured source. Retries first request the
+By default, one source permits three consecutive failures without meaningful progress; with
+multiple sources this budget covers at least every configured source. Advancing
+the current file's real byte count by at least the configured percentage (default one percent) beyond the high-water
+mark at the start of that attempt resets the budget. Replayed bytes and integrity
+failures do not.
+Sources are visited in order. Retries first request the
 temporary file's current byte offset, validate `Content-Range`, and send `If-Range`
 when a strong ETag is available. Full responses reset progress and overwrite the
 temporary file; size or SHA-256 failures restart with fresh bytes. Exhausted retries
 stop the update immediately, preserving the failed file's progress and preventing
-later downloads, stale-file cleanup, or trusted-cache writes. Connect/read timeouts
-remain 10/60 seconds. Resume currently applies within one run, not across restarts.
+later downloads, stale-file cleanup, or trusted-cache writes. Connect, manifest-read,
+and file-read timeouts default to 10, 30, and 60 seconds and can be configured in
+`mc-update.properties`. Resume currently applies within one run, not across restarts.
 
 Failed updates offer “Use trusted version”, “Retry update”, and “Exit”. Manual retry
 fetches a fresh manifest, keeps installed changes, and skips files that still match
@@ -242,10 +247,20 @@ Configuration is resolved in this order (normal mode):
 | `mc-update.server-gui` | `disabled` | `disabled`, `recommended`, or `required` server-preset policy |
 | `mc-update.manifest-public-key` | *(required)* | Base64 X.509 Ed25519 public key pinned by the administrator |
 | `mc-update.manifest-key-id` | *(optional)* | Expected `ed25519-…` key identifier |
+| `mc-update.max-no-progress-failures` | `3` | Consecutive no-progress failures allowed per file; effective budget also covers every server (1–1000) |
+| `mc-update.connect-timeout-seconds` | `10` | Main update connection timeout in seconds (1–3600) |
+| `mc-update.manifest-read-timeout-seconds` | `30` | Manifest read inactivity timeout in seconds (1–3600) |
+| `mc-update.download-read-timeout-seconds` | `60` | File read inactivity timeout in seconds (1–3600) |
+| `mc-update.progress-reset-threshold-percent` | `1` | New bytes beyond the previous high-water mark needed in one attempt to reset the failure count (1–100) |
 
 **Recommended: `mc-update.properties`** (written by setup script):
 ```properties
 server=http://cdn1.example.com:25565,http://cdn2.example.com:8443
+max-no-progress-failures=3
+connect-timeout-seconds=10
+manifest-read-timeout-seconds=30
+download-read-timeout-seconds=60
+progress-reset-threshold-percent=1
 ```
 
 **Inline agent args**:

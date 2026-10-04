@@ -130,12 +130,12 @@ manifest-public-key=BASE64_X509_ED25519_PUBLIC_KEY
 ## 安全跳过更新
 
 资源下载连续约 5 秒没有新数据时，核心通过状态事件提示正在等待网络。
-单源最多尝试 3 次；多源按配置顺序切换，尝试次数至少覆盖全部配置源。
+默认允许连续 3 次无明显进展的失败；多源的此项额度至少覆盖全部配置源，并按配置顺序切换。一次下载尝试中，当前文件实际字节进度比尝试开始前的历史最高进度再推进至少配置的百分比（默认 1%）时，连续无进展计数清零；重传已有字节或完整性校验失败不算进展。
 网络失败后优先按本次运行的临时文件长度续传，检查 `Content-Range`，有强 ETag 时发送 `If-Range`。
 服务器返回完整响应时重新下载并重置进度；大小或 SHA-256 不符时丢弃错误内容后重试。
 重试耗尽后立即停止当前更新，保留失败文件进度，不再下载后续文件、清理旧文件或写入可信清单缓存。
 失败界面提供“回退到可信版本”“重试更新”和“退出”。手动重试会重新获取清单，保留已完成的改动并跳过仍符合校验值的文件；连续重试共用首次更新前的回滚备份，直到成功、回退或退出。
-连接/读取超时仍为 10/60 秒，没有新增超时配置；续传暂不跨进程重启保留。
+连接/文件读取超时默认为 10/60 秒，清单读取超时默认为 30 秒，均可在 `mc-update.properties` 中配置；续传暂不跨进程重启保留。
 
 完整更新成功后，更新器会逐项校验本地资源，并以原子方式缓存已经通过 Ed25519 验证的 v3 清单信封到 `.mc-update/signed-manifest-cache.properties`。用户确认跳过进行中的更新时，更新器会先还原本次更新，再校验缓存的 Ed25519 签名、有效期、服务器身份、清单哈希，以及每个列出资源的 SHA-256 与大小。缓存被人为修改、过期，或任意资源不一致时，Minecraft 都不会启动。
 
@@ -223,10 +223,20 @@ manifest-public-key=BASE64_X509_ED25519_PUBLIC_KEY
 | `mc-update.server-gui` | `disabled` | 服务端预设策略：`disabled`、`recommended` 或 `required` |
 | `mc-update.manifest-public-key` | *（必填）* | 管理员固定的 Base64 X.509 Ed25519 公钥 |
 | `mc-update.manifest-key-id` | *（可选）* | 期望的 `ed25519-…` 密钥标识 |
+| `mc-update.max-no-progress-failures` | `3` | 单个文件连续无进展失败额度；实际额度至少等于服务器数量（1–1000） |
+| `mc-update.connect-timeout-seconds` | `10` | 主更新连接超时秒数（1–3600） |
+| `mc-update.manifest-read-timeout-seconds` | `30` | 清单读取等待超时秒数（1–3600） |
+| `mc-update.download-read-timeout-seconds` | `60` | 文件读取等待超时秒数（1–3600） |
+| `mc-update.progress-reset-threshold-percent` | `1` | 单次尝试中新字节超过历史最高进度的百分比达到此值时，清零无进展失败计数（1–100） |
 
 **推荐方式：`mc-update.properties`**（由安装脚本写入）：
 ```properties
 server=http://cdn1.example.com:25565,http://cdn2.example.com:8443
+max-no-progress-failures=3
+connect-timeout-seconds=10
+manifest-read-timeout-seconds=30
+download-read-timeout-seconds=60
+progress-reset-threshold-percent=1
 ```
 
 **内联 agent 参数**：

@@ -1,5 +1,6 @@
 package com.zack88604.autoupdater.infrastructure.http;
 
+import com.zack88604.autoupdater.config.DownloadSettings;
 import com.zack88604.autoupdater.infrastructure.json.JsonParser;
 import java.io.BufferedReader;
 import java.io.File;
@@ -89,20 +90,38 @@ public final class ServerClient {
     private final Listener listener;
     private int currentServerIndex;
     private final int readTimeoutMillis;
+    private final int connectTimeoutMillis;
+    private final int manifestReadTimeoutMillis;
+    private final int maxNoProgressFailures;
+    private final int progressResetThresholdPercent;
     private final long waitingNoticeMillis;
     private final long retryDelayMillis;
     private final Object feedbackLock = new Object();
 
     public ServerClient(List<String> serverUrls, Listener listener) {
-        this(serverUrls, listener, 60000, 5000, 1000);
+        this(serverUrls, listener, DownloadSettings.defaults());
+    }
+
+    public ServerClient(List<String> serverUrls, Listener listener, DownloadSettings settings) {
+        this(serverUrls, listener, settings, settings.getDownloadReadTimeoutMillis(), 5000, 1000);
     }
 
     // Short timing is available to package-local network regression tests only.
     ServerClient(List<String> serverUrls, Listener listener, int readTimeoutMillis,
                  long waitingNoticeMillis, long retryDelayMillis) {
+        this(serverUrls, listener, DownloadSettings.defaults(), readTimeoutMillis,
+                waitingNoticeMillis, retryDelayMillis);
+    }
+
+    private ServerClient(List<String> serverUrls, Listener listener, DownloadSettings settings,
+                         int readTimeoutMillis, long waitingNoticeMillis, long retryDelayMillis) {
         this.serverUrls = Collections.unmodifiableList(new ArrayList<>(serverUrls));
         this.listener = listener;
         this.readTimeoutMillis = readTimeoutMillis;
+        this.connectTimeoutMillis = settings.getConnectTimeoutMillis();
+        this.manifestReadTimeoutMillis = settings.getManifestReadTimeoutMillis();
+        this.maxNoProgressFailures = settings.getMaxNoProgressFailures();
+        this.progressResetThresholdPercent = settings.getProgressResetThresholdPercent();
         this.waitingNoticeMillis = waitingNoticeMillis;
         this.retryDelayMillis = retryDelayMillis;
     }
@@ -176,36 +195,43 @@ public final class ServerClient {
     public void downloadWithFallback(String path, File destination, long expectedSize,
                                      String expectedHash) throws DownloadFailedException {
         int startIndex = currentServerIndex;
-        int maximum = Math.max(3, serverUrls.size());
+        int maximum = Math.max(maxNoProgressFailures, serverUrls.size());
+        int consecutiveFailuresWithoutProgress = 0;
+        long highestBytes = 0;
         IOException lastFailure = new IOException("No update servers configured");
         FailureReason reason = FailureReason.NETWORK;
         String validator = null;
         boolean fresh = true;
         long total = expectedSize > 0 ? expectedSize : 0;
-        for (int attempt = 1; attempt <= maximum && !serverUrls.isEmpty(); attempt++) {
+        for (int attempt = 1; !serverUrls.isEmpty(); attempt++) {
             listener.checkpoint();
             int index = (startIndex + attempt - 1) % serverUrls.size();
             String server = serverUrls.get(index);
             long offset = !fresh && destination.isFile() ? destination.length() : 0;
+            long highestBeforeAttempt = highestBytes;
+            // The display retains its existing retry wording. Its fraction now
+            // reflects the no-progress budget rather than all HTTP requests.
+            int retrySlot = attempt == 1 ? 1
+                    : Math.min(maximum, Math.max(2, consecutiveFailuresWithoutProgress + 1));
             if (attempt > 1) {
-                feedback(DownloadState.RETRYING, attempt, maximum, offset);
-                retryDelay(attempt);
+                feedback(DownloadState.RETRYING, retrySlot, maximum, offset);
+                retryDelay(retrySlot);
             }
-            listener.onLog("  [GET]   " + server + path + " (attempt " + attempt + "/" + maximum
+            listener.onLog("  [GET]   " + server + path + " (attempt " + retrySlot + "/" + maximum
                     + (offset > 0 ? ", resume at " + offset + " bytes" : "") + ")");
             try {
                 // Only resume bytes obtained during this invocation; discard an invalid artifact.
                 if (fresh) {
                     total = expectedSize > 0 ? expectedSize : 0;
                     try (FileOutputStream ignored = openDestination(destination, false)) { }
-                    if (attempt > 1) feedback(DownloadState.RESTARTING, attempt, maximum, 0);
+                    if (attempt > 1) feedback(DownloadState.RESTARTING, retrySlot, maximum, 0);
                     listener.onDownloadProgress(total, 0);
                 }
-                TransferResult result = download(server + path, destination, offset, total, validator, attempt, maximum);
+                TransferResult result = download(server + path, destination, offset, total, validator, retrySlot, maximum);
                 total = result.total;
                 validator = result.validator;
                 fresh = false;
-                feedback(DownloadState.VERIFYING, attempt, maximum, 0);
+                feedback(DownloadState.VERIFYING, retrySlot, maximum, 0);
                 if (expectedSize >= 0 && destination.length() != expectedSize) {
                     throw new IntegrityException("Expected " + expectedSize + " bytes, received " + destination.length());
                 }
@@ -235,8 +261,26 @@ public final class ServerClient {
             if (reason == FailureReason.LOCAL_IO) {
                 throw new DownloadFailedException(path, reason, attempt, lastFailure);
             }
+            long progressTotal = expectedSize > 0 ? expectedSize : total;
+            if (reason != FailureReason.INTEGRITY && progressTotal > 0 && destination.isFile()) {
+                highestBytes = Math.max(highestBytes, Math.min(progressTotal, destination.length()));
+            }
+            // Compare real file bytes, rounded up to the configured share;
+            // replaying the same prefix cannot earn another progress credit.
+            long minimumProgress = progressTotal > 0
+                    ? (progressTotal / 100) * progressResetThresholdPercent
+                    + ((progressTotal % 100) * progressResetThresholdPercent + 99) / 100
+                    : Long.MAX_VALUE;
+            if (reason != FailureReason.INTEGRITY && highestBytes - highestBeforeAttempt >= minimumProgress) {
+                consecutiveFailuresWithoutProgress = 0;
+            } else {
+                consecutiveFailuresWithoutProgress++;
+            }
+            if (consecutiveFailuresWithoutProgress >= maximum) {
+                throw new DownloadFailedException(path, reason, attempt, lastFailure);
+            }
         }
-        throw new DownloadFailedException(path, reason, serverUrls.isEmpty() ? 0 : maximum, lastFailure);
+        throw new DownloadFailedException(path, reason, 0, lastFailure);
     }
 
     private void switchServerIfNeeded(int index) {
@@ -254,8 +298,8 @@ public final class ServerClient {
         HttpURLConnection connection =
                 (HttpURLConnection) URI.create(url).toURL().openConnection();
         connection.setRequestMethod("GET");
-        connection.setConnectTimeout(10000);
-        connection.setReadTimeout(30000);
+        connection.setConnectTimeout(connectTimeoutMillis);
+        connection.setReadTimeout(manifestReadTimeoutMillis);
         connection.setRequestProperty("Accept", "application/json");
         try {
             int status = connection.getResponseCode();
@@ -384,7 +428,7 @@ public final class ServerClient {
             listener.checkpoint();
             connection = (HttpURLConnection) URI.create(url).toURL().openConnection();
             connection.setRequestMethod("GET");
-            connection.setConnectTimeout(10000);
+            connection.setConnectTimeout(connectTimeoutMillis);
             connection.setReadTimeout(readTimeoutMillis);
             connection.setRequestProperty("Accept-Encoding", "identity");
             if (offset > 0) {

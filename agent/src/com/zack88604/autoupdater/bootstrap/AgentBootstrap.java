@@ -59,7 +59,8 @@ public final class AgentBootstrap {
 
         CountDownLatch launchLatch = new CountDownLatch(1);
         UpdateService service = new UpdateService(config.getGameDir(),
-                parseServerList(config.getServer()), config.getManifestPublicKey(), config.getManifestKeyId());
+                parseServerList(config.getServer()), config.getManifestPublicKey(), config.getManifestKeyId(),
+                config.getDownloadSettings());
         UpdateController controller = new UpdateController(service,
                 createGuiAdapter(config),
                 launchLatch, config.isDebug());

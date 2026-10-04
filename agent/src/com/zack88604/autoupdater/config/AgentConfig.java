@@ -37,9 +37,11 @@ public final class AgentConfig {
     private final boolean admin;
     private final String guiAdapterFactoryClassName;
     private final ServerGuiMode serverGuiMode;
+    private final DownloadSettings downloadSettings;
 
     private AgentConfig(String gameDir, String server, String manifestPublicKey, String manifestKeyId, boolean debug, boolean admin,
-                        String guiAdapterFactoryClassName, ServerGuiMode serverGuiMode) {
+                        String guiAdapterFactoryClassName, ServerGuiMode serverGuiMode,
+                        DownloadSettings downloadSettings) {
         this.gameDir = gameDir;
         this.server = server;
         this.manifestPublicKey = manifestPublicKey;
@@ -48,6 +50,7 @@ public final class AgentConfig {
         this.admin = admin;
         this.guiAdapterFactoryClassName = guiAdapterFactoryClassName;
         this.serverGuiMode = serverGuiMode;
+        this.downloadSettings = downloadSettings;
     }
 
     /** Resolve configuration from the current JVM and the agent argument string. */
@@ -139,8 +142,20 @@ public final class AgentConfig {
             manifestKeyId = coalesce(fileConfig.getProperty("manifest-key-id"), arguments.get("manifest-key-id"), system.getProperty(PROP_MANIFEST_KEY_ID));
         }
 
+        DownloadSettings downloadSettings = new DownloadSettings(
+                intSetting("max-no-progress-failures", DownloadSettings.DEFAULT_MAX_NO_PROGRESS_FAILURES,
+                        1, 1000, admin, arguments, system, fileConfig),
+                intSetting("connect-timeout-seconds", DownloadSettings.DEFAULT_CONNECT_TIMEOUT_SECONDS,
+                        1, 3600, admin, arguments, system, fileConfig),
+                intSetting("manifest-read-timeout-seconds", DownloadSettings.DEFAULT_MANIFEST_READ_TIMEOUT_SECONDS,
+                        1, 3600, admin, arguments, system, fileConfig),
+                intSetting("download-read-timeout-seconds", DownloadSettings.DEFAULT_DOWNLOAD_READ_TIMEOUT_SECONDS,
+                        1, 3600, admin, arguments, system, fileConfig),
+                intSetting("progress-reset-threshold-percent", DownloadSettings.DEFAULT_PROGRESS_RESET_THRESHOLD_PERCENT,
+                        1, 100, admin, arguments, system, fileConfig));
+
         return new AgentConfig(gameDir, server, manifestPublicKey, manifestKeyId, isTrue(debugValue), admin,
-                guiAdapterFactory, ServerGuiMode.parse(serverGuiModeValue));
+                guiAdapterFactory, ServerGuiMode.parse(serverGuiModeValue), downloadSettings);
     }
 
     public String getGameDir() {
@@ -178,6 +193,10 @@ public final class AgentConfig {
 
     public boolean isAdmin() {
         return admin;
+    }
+
+    public DownloadSettings getDownloadSettings() {
+        return downloadSettings;
     }
 
     /**
@@ -226,9 +245,40 @@ public final class AgentConfig {
         return copy;
     }
 
+    private static int intSetting(String key, int defaultValue, int minimum, int maximum,
+                                  boolean admin, Map<String, String> arguments,
+                                  Properties system, Properties file) {
+        String systemValue = system.getProperty("mc-update." + key);
+        String value = admin
+                ? firstDefined(arguments.get(key), systemValue, file.getProperty(key))
+                : firstDefined(file.getProperty(key), arguments.get(key), systemValue);
+        if (value == null) {
+            return defaultValue;
+        }
+        try {
+            int parsed = Integer.parseInt(value.trim());
+            if (parsed >= minimum && parsed <= maximum) {
+                return parsed;
+            }
+        } catch (NumberFormatException ignored) {
+            // Report invalid values with the setting name and allowed range below.
+        }
+        throw new IllegalArgumentException("Invalid updater setting '" + key
+                + "': expected an integer from " + minimum + " to " + maximum + ", got '" + value + "'");
+    }
+
     private static String coalesce(String... values) {
         for (String value : values) {
             if (value != null && !value.isEmpty()) {
+                return value;
+            }
+        }
+        return null;
+    }
+
+    private static String firstDefined(String... values) {
+        for (String value : values) {
+            if (value != null) {
                 return value;
             }
         }
