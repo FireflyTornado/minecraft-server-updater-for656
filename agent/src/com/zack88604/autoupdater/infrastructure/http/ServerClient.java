@@ -1,5 +1,6 @@
 package com.zack88604.autoupdater.infrastructure.http;
 
+import com.zack88604.autoupdater.infrastructure.json.JsonParser;
 import java.io.BufferedReader;
 import java.io.File;
 import java.io.FileOutputStream;
@@ -30,6 +31,19 @@ public final class ServerClient {
 
     public enum DownloadState { RECEIVING, WAITING, RETRYING, RESUMING, RESTARTING, VERIFYING }
     public enum FailureReason { TIMEOUT, NETWORK, HTTP, INTEGRITY, LOCAL_IO }
+
+    /** Only emitted when every configured server explicitly reports maintenance. */
+    public static final class MaintenanceException extends IOException {
+        public MaintenanceException(String message) { super(message); }
+    }
+
+    private static final class ServerMaintenanceException extends IOException {
+        ServerMaintenanceException(String message) { super(message); }
+    }
+
+    public static final class HttpStatusException extends IOException {
+        HttpStatusException(int status) { super("HTTP " + status); }
+    }
 
     /** Retains the original cause after bounded attempts. */
     public static final class DownloadFailedException extends IOException {
@@ -117,6 +131,8 @@ public final class ServerClient {
     /** Fetch a UTF-8 response, failing over through each configured server. */
     public String getWithFallback(String path) throws IOException {
         IOException lastException = null;
+        String[] maintenanceMessages = new String[serverUrls.size()];
+        int maintenanceCount = 0;
         int startIndex = currentServerIndex;
         for (int i = 0; i < serverUrls.size(); i++) {
             listener.checkpoint();
@@ -129,10 +145,17 @@ public final class ServerClient {
                 String response = get(server + path);
                 switchServerIfNeeded(index);
                 return response;
+            } catch (ServerMaintenanceException e) {
+                maintenanceMessages[index] = e.getMessage();
+                maintenanceCount++;
+                listener.onLog("  [MAINTENANCE] Skipping server: " + server);
             } catch (IOException e) {
                 lastException = e;
                 listener.onLog("  [WARN]  Server unreachable: " + server);
             }
+        }
+        if (!serverUrls.isEmpty() && maintenanceCount == serverUrls.size()) {
+            throw new MaintenanceException(maintenanceMessages[0]);
         }
         throw lastException != null ? lastException
                 : new IOException("All servers unreachable");
@@ -234,17 +257,42 @@ public final class ServerClient {
         connection.setConnectTimeout(10000);
         connection.setReadTimeout(30000);
         connection.setRequestProperty("Accept", "application/json");
-        try (BufferedReader reader = new BufferedReader(
-                new InputStreamReader(connection.getInputStream(), StandardCharsets.UTF_8))) {
-            StringBuilder response = new StringBuilder();
-            String line;
-            while ((line = reader.readLine()) != null) {
-                listener.checkpoint();
-                response.append(line);
+        try {
+            int status = connection.getResponseCode();
+            if (status != 200) {
+                if (status == 503 && (url.endsWith("/api/v3/manifest") || url.endsWith("/api/v2/manifest"))) {
+                    String error = readErrorBody(connection);
+                    if ("MAINTENANCE".equals(JsonParser.getDecodedString(error, "code"))) {
+                        String message = JsonParser.getDecodedString(error, "message");
+                        if (message == null || message.isBlank()) {
+                            message = "Update server is under maintenance. Please try again later.";
+                        }
+                        throw new ServerMaintenanceException(message);
+                    }
+                }
+                throw new HttpStatusException(status);
             }
-            return response.toString();
+            try (BufferedReader reader = new BufferedReader(
+                    new InputStreamReader(connection.getInputStream(), StandardCharsets.UTF_8))) {
+                StringBuilder response = new StringBuilder();
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    listener.checkpoint();
+                    response.append(line);
+                }
+                return response.toString();
+            }
         } finally {
             connection.disconnect();
+        }
+    }
+
+    private static String readErrorBody(HttpURLConnection connection) throws IOException {
+        InputStream error = connection.getErrorStream();
+        if (error == null) return "";
+        try (InputStream input = error) {
+            byte[] bytes = input.readNBytes(65537);
+            return bytes.length > 65536 ? "" : new String(bytes, StandardCharsets.UTF_8);
         }
     }
 

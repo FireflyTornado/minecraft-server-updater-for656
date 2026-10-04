@@ -239,6 +239,20 @@ final class SwingUpdateView implements UpdateView {
             return;
         }
         shownError = errorMessage;
+        if (state.getErrorCode() == com.zack88604.autoupdater.gui.api.UpdateErrorCode.MAINTENANCE) {
+            JTextArea message = new JTextArea(errorMessage, 6, 45);
+            message.setEditable(false);
+            message.setLineWrap(true);
+            message.setWrapStyleWord(true);
+            message.setCaretPosition(0);
+            Object[] options = { "Launch trusted version", "Exit" };
+            int choice = JOptionPane.showOptionDialog(frame, new JScrollPane(message),
+                    "Servers under maintenance", JOptionPane.DEFAULT_OPTION, JOptionPane.INFORMATION_MESSAGE,
+                    null, options, options[0]);
+            if (choice == 0) actions.requestSkipUpdate();
+            else actions.requestClose();
+            return;
+        }
         if (state.getClosePolicy() == ClosePolicy.SKIP_OR_EXIT) {
             Object[] options = { "Use trusted version", "Retry update", "Exit" };
             int choice = JOptionPane.showOptionDialog(frame,

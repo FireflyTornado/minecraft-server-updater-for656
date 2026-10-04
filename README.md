@@ -146,6 +146,43 @@ recovery, or exit.
 
 After a complete update, the agent verifies every manifest resource locally and atomically caches the already Ed25519-signed v3 envelope in `.mc-update/signed-manifest-cache.properties`. When the user confirms skipping an in-progress update, the agent first rolls back that run, then re-verifies the cached Ed25519 signature, expiry, server identity, manifest hash, and SHA-256/size of every listed local resource. Any missing, changed, expired, or manually modified cache entry blocks Minecraft startup.
 
+## Server Maintenance Mode
+
+Add a `maintenance` object to `/data/update-config.json`, keeping existing fields:
+
+```json
+"maintenance": {
+  "enabled": true,
+  "message": "The server is under maintenance.\nPlease try again later."
+}
+```
+
+Maintenance is disabled by default. Configuration is read on each manifest request;
+turning it off needs neither a restart nor manifest regeneration. `enabled` must be
+a boolean. `message` supports Unicode, newlines and quotes (up to 4096 characters);
+missing or blank text uses a default. Replace the complete configuration atomically
+to avoid exposing partially written JSON.
+
+Only `/api/v2/manifest` and `/api/v3/manifest` are gated, returning HTTP 503 with
+`{"code":"MAINTENANCE","message":"…"}` and `Cache-Control: no-store`.
+Resource, core-agent and GUI-preset downloads and health checks remain available.
+Admission is checked on initial update and manual retry. An admitted round,
+including remaining files, automatic retries, range recovery and automatic mirror
+failover, can finish without checking maintenance again.
+
+Clients skip maintenance servers and try other configured sources. The maintenance
+dialog appears only when every configured source explicitly reports maintenance,
+using the first configured server's message, regardless of the currently selected
+mirror. Mixed maintenance and network/ordinary HTTP failures remain ordinary failures.
+
+The dialog offers only trusted-version launch and exit. Trusted launch rolls back
+this update's changes and verifies the cached signature, expiry, server identity
+and local resources before allowing Minecraft to start; missing or invalid cache
+prevents launch. Exit keeps installed changes without rollback or Minecraft launch,
+reusing the normal failed-update exit flow.
+Publish the updated core and preset before enabling maintenance; older clients
+can be blocked at the manifest endpoint but lack the dedicated dialog.
+
 ## API
 
 | Endpoint | Method | Description |

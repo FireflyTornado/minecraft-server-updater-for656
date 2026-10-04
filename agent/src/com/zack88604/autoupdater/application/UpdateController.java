@@ -143,7 +143,8 @@ public final class UpdateController implements UpdateViewActions {
     public void requestRetryUpdate() {
         final CountDownLatch previousWorker;
         synchronized (closeLock) {
-            if (closePolicy != ClosePolicy.SKIP_OR_EXIT || closeRequested || retryRequested) {
+            if (closePolicy != ClosePolicy.SKIP_OR_EXIT || closeRequested || retryRequested
+                    || snapshot().getErrorCode() == UpdateErrorCode.MAINTENANCE) {
                 return;
             }
             retryRequested = true;
@@ -294,6 +295,9 @@ public final class UpdateController implements UpdateViewActions {
                 onUpdateEvent(new UpdateEvent.Completed(result));
             } catch (UpdateExecutionControl.CancelledException ignored) {
                 // The rollback thread restores the transaction before Minecraft starts.
+            } catch (com.zack88604.autoupdater.infrastructure.http.ServerClient.MaintenanceException maintenance) {
+                onUpdateEvent(new UpdateEvent.Failed(maintenance.getMessage(), maintenance,
+                        UpdateErrorCode.MAINTENANCE));
             } catch (Throwable cause) {
                 String message = cause.getMessage() != null ? cause.getMessage() : cause.toString();
                 onUpdateEvent(new UpdateEvent.Failed("Update error: " + message, cause,
@@ -318,7 +322,8 @@ public final class UpdateController implements UpdateViewActions {
         stateRenderer.submit(next);
         if (event instanceof UpdateEvent.Completed) {
             handleCompletion(((UpdateEvent.Completed) event).getResult());
-        } else if (event instanceof UpdateEvent.Failed) {
+        } else if (event instanceof UpdateEvent.Failed
+                && ((UpdateEvent.Failed) event).getErrorCode() != UpdateErrorCode.MAINTENANCE) {
             ((UpdateEvent.Failed) event).getCause().printStackTrace();
         }
     }
@@ -347,6 +352,9 @@ public final class UpdateController implements UpdateViewActions {
 
     private static UpdateErrorCode classifyError(Throwable cause) {
         for (Throwable current = cause; current != null; current = current.getCause()) {
+            if (current instanceof com.zack88604.autoupdater.infrastructure.http.ServerClient.HttpStatusException) {
+                return UpdateErrorCode.NETWORK;
+            }
             if (current instanceof com.zack88604.autoupdater.infrastructure.http.ServerClient.DownloadFailedException) {
                 switch (((com.zack88604.autoupdater.infrastructure.http.ServerClient.DownloadFailedException) current).getReason()) {
                     case TIMEOUT: case NETWORK: case HTTP: return UpdateErrorCode.NETWORK;

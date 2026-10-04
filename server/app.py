@@ -125,6 +125,35 @@ def _load_update_config():
     return value
 
 
+def _maintenance_response():
+    """Gate new update rounds only; active transfers and their retries stay open."""
+    try:
+        maintenance = _load_update_config().get('maintenance', {})
+        if not isinstance(maintenance, dict):
+            raise ValueError('maintenance must be an object')
+        enabled = maintenance.get('enabled', False)
+        if not isinstance(enabled, bool):
+            raise ValueError('maintenance.enabled must be a boolean')
+        message = maintenance.get('message', '')
+        if not isinstance(message, str) or len(message) > 4096:
+            raise ValueError('maintenance.message must be a string of at most 4096 characters')
+    except ValueError as error:
+        logger.error('Failed to load maintenance configuration: %s', error)
+        response = jsonify({'code': 'CONFIGURATION_ERROR', 'error': 'config not available'})
+        response.status_code = 503
+        response.headers['Cache-Control'] = 'no-store'
+        return response
+    if not enabled:
+        return None
+    response = jsonify({
+        'code': 'MAINTENANCE',
+        'message': message if message.strip() else 'Update server is under maintenance. Please try again later.',
+    })
+    response.status_code = 503
+    response.headers['Cache-Control'] = 'no-store'
+    return response
+
+
 def _validate_gui_preset_source(value):
     """Validate the administrator-maintained preset declaration."""
     if not isinstance(value, dict):
@@ -249,6 +278,9 @@ def api_manifest_v1():
 @app.route('/api/v2/manifest', methods=['GET'])
 def api_manifest():
     """Return the full file manifest (paths, hashes, sizes)."""
+    maintenance = _maintenance_response()
+    if maintenance is not None:
+        return maintenance
     manifest = _load_manifest()
     if manifest is None:
         return jsonify({'error': 'manifest not available'}), 503
@@ -258,6 +290,9 @@ def api_manifest():
 @app.route('/api/v3/manifest', methods=['GET'])
 def api_manifest_v3():
     """Return an Ed25519-signed manifest for clients with a pinned public key."""
+    maintenance = _maintenance_response()
+    if maintenance is not None:
+        return maintenance
     manifest = _load_manifest()
     if manifest is None:
         return jsonify({'error': 'manifest not available'}), 503

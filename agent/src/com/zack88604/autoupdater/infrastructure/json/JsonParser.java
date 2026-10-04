@@ -19,6 +19,35 @@ public final class JsonParser {
         return matcher.find() ? matcher.group(1) : null;
     }
 
+    /** Decode a JSON string, including escaped quotes, newlines and Unicode. */
+    public static String getDecodedString(String json, String key) {
+        Matcher matcher = Pattern.compile("\"" + Pattern.quote(key)
+                + "\"\\s*:\\s*\"((?:[^\"\\\\\\x00-\\x1f]|\\\\[\"\\\\/bfnrt]|\\\\u[0-9a-fA-F]{4})*)\"").matcher(json);
+        if (!matcher.find()) return null;
+        String encoded = matcher.group(1);
+        StringBuilder decoded = new StringBuilder();
+        for (int index = 0; index < encoded.length(); index++) {
+            char value = encoded.charAt(index);
+            if (value != '\\') {
+                decoded.append(value);
+                continue;
+            }
+            switch (encoded.charAt(++index)) {
+                case 'b': decoded.append('\b'); break;
+                case 'f': decoded.append('\f'); break;
+                case 'n': decoded.append('\n'); break;
+                case 'r': decoded.append('\r'); break;
+                case 't': decoded.append('\t'); break;
+                case 'u':
+                    decoded.append((char) Integer.parseInt(encoded.substring(index + 1, index + 5), 16));
+                    index += 4;
+                    break;
+                default: decoded.append(encoded.charAt(index));
+            }
+        }
+        return decoded.toString();
+    }
+
     public static int getInt(String json, String key, int defaultValue) {
         Pattern pattern = Pattern.compile("\"" + key + "\"\\s*:\\s*(-?\\d+)");
         Matcher matcher = pattern.matcher(json);

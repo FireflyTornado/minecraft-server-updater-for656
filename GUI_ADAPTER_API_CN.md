@@ -254,7 +254,7 @@ public final class MyGuiView implements UpdateView {
 | `cancelCloseConfirmation()` | 用户拒绝或关闭确认框时调用；工作线程恢复。 |
 | `requestClose()` | 用户确认关闭后调用；`ALLOW` 策略时可直接调用。 |
 | `requestSkipUpdate()` | 用户接受 `SKIP_OR_EXIT` 的跳过更新选项时调用；controller 会回滚并校验已签名缓存后才启动。 |
-| `requestRetryUpdate()` | 用户选择“重试更新”时调用，仅适用于 `SKIP_OR_EXIT`；重新获取清单，保留已完成改动及最初的回滚备份。 |
+| `requestRetryUpdate()` | 用户选择“重试更新”时调用，仅适用于 `SKIP_OR_EXIT` 的普通失败；重新获取清单，保留已完成改动及最初的回滚备份。`MAINTENANCE` 状态不允许重试。 |
 | `notifyWindowClosed()` | 原生窗口真正关闭完成。 |
 
 controller 根据当前状态中的**关闭策略**决定结果：
@@ -263,7 +263,7 @@ controller 根据当前状态中的**关闭策略**决定结果：
 |---------------|------|----------------|
 | `CONFIRM` | 更新进行中 | 将原生关闭操作设为「不执行任何操作」，并在显示工具包确认警告前立刻调用 `beginCloseConfirmation()`；若用户拒绝则调用 `cancelCloseConfirmation()`。若确认则调用 `requestClose()`：更新器取消任务、还原本次更新改动过的全部文件，再启动 Minecraft 并关闭视图。 |
 | `ALLOW` | 更新成功 | 允许关闭；启动锁被释放，窗口关闭。 |
-| `SKIP_OR_EXIT` | 更新过程出现致命异常 | 提供“回退到可信版本”“重试更新”“退出”。分别调用 `requestSkipUpdate()`、`requestRetryUpdate()`、`requestClose()`。回退后仅在签名缓存校验通过后启动；重试不回滚已完成的改动。 |
+| `SKIP_OR_EXIT` | 普通更新失败或全部服务器维护 | 普通失败提供“回退到可信版本”“重试更新”“退出”。`getErrorCode() == MAINTENANCE` 时显示 `getErrorMessage()` 原文，并提供“可信版本启动”和“退出”的入口。JavaFX 在状态区右上角提供“查看详情”，点击后才弹窗；Swing 直接弹窗。关闭维护弹窗或主窗口按退出处理。分别调用 `requestSkipUpdate()` 和 `requestClose()`。可信启动须回滚并校验缓存；退出保留已完成改动，不启动 Minecraft。 |
 | `EXIT_FAILURE` | 更新失败 | 任何关闭（请求或原生）都会调用 `System.exit(1)`——**Minecraft 不会启动**。 |
 
 > 切勿自行释放启动锁或调用 `System.exit`，两者都由 controller 掌控。

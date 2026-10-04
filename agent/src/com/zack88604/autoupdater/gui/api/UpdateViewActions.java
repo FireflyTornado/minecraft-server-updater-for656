@@ -41,7 +41,8 @@ public interface UpdateViewActions {
 
     /**
      * Retry a failed update using a freshly fetched manifest, keeping installed
-     * files and the original rollback backups. Valid only for SKIP_OR_EXIT.
+     * files and the original rollback backups. Valid only for SKIP_OR_EXIT,
+     * except MAINTENANCE, which offers trusted-version launch or exit only.
      */
     default void requestRetryUpdate() {
         // Older controllers leave the failed update open rather than exit.

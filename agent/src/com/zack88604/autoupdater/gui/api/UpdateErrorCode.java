@@ -8,6 +8,8 @@ package com.zack88604.autoupdater.gui.api;
  * presentation decisions rather than parsing that message.</p>
  */
 public enum UpdateErrorCode {
+    /** Every configured update server explicitly reports maintenance. */
+    MAINTENANCE,
     /** An update server could not be reached or its connection timed out. */
     NETWORK,
     /** A signed manifest or its trusted signing key could not be authenticated. */

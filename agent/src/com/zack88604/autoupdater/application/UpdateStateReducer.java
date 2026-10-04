@@ -2,6 +2,7 @@ package com.zack88604.autoupdater.application;
 
 import com.zack88604.autoupdater.domain.UpdateResult;
 import com.zack88604.autoupdater.gui.api.ClosePolicy;
+import com.zack88604.autoupdater.gui.api.UpdateErrorCode;
 import com.zack88604.autoupdater.gui.api.DownloadProgress;
 import com.zack88604.autoupdater.gui.api.UpdatePhase;
 import com.zack88604.autoupdater.gui.api.UpdateSummary;
@@ -130,14 +131,16 @@ public final class UpdateStateReducer {
 
     private static void applyFailure(UpdateUiState.Builder builder,
                                      UpdateUiState current, UpdateEvent.Failed failure) {
+        boolean maintenance = failure.getErrorCode() == UpdateErrorCode.MAINTENANCE;
         List<String> logLines = appendLog(current.getLogLines(),
-                "[ERROR] " + failure.getMessage());
+                (maintenance ? "[MAINTENANCE] " : "[ERROR] ") + failure.getMessage());
         logLines = appendLog(logLines,
-                failure.isSkipUpdateAllowed()
+                maintenance ? "[INFO] All update servers are under maintenance. Use the trusted version or exit."
+                : failure.isSkipUpdateAllowed()
                         ? "[FATAL] Update failed. Retry, restore verified cached resources, or exit."
                         : "[FATAL] Update failed. Minecraft will not start; close the window to exit.");
         builder.phase(UpdatePhase.ERROR)
-                .status("Update failed")
+                .status(maintenance ? "Servers under maintenance" : "Update failed")
                 .description("")
                 .overallProgressIndeterminate(false)
                 .downloadProgress(stoppedDownload(current.getDownloadProgress()))

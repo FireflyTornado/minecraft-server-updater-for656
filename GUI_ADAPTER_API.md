@@ -258,7 +258,7 @@ Your view never decides outcomes; it only reports **intent** through
 | `cancelCloseConfirmation()` | When the user rejects or dismisses that dialog. The worker resumes. |
 | `requestClose()` | After the user confirmed closing, or immediately when the policy is `ALLOW`. |
 | `requestSkipUpdate()` | When a `SKIP_OR_EXIT` failure dialog is accepted; the controller rolls back and verifies the signed cache before launching. |
-| `requestRetryUpdate()` | On “Retry update”, only for `SKIP_OR_EXIT`; fetches a fresh manifest while keeping installed files and the original rollback backups. |
+| `requestRetryUpdate()` | On “Retry update”, only for ordinary `SKIP_OR_EXIT` failures; fetches a fresh manifest while keeping installed files and the original rollback backups. Disabled for `MAINTENANCE`. |
 | `notifyWindowClosed()` | The native window has actually finished closing. |
 
 The controller applies the current **close policy** from the state:
@@ -267,7 +267,7 @@ The controller applies the current **close policy** from the state:
 |---------------|------|-------------------|
 | `CONFIRM` | Update in progress | Set the native close operation to "do nothing", call `beginCloseConfirmation()` immediately before showing a toolkit-specific warning, and call `cancelCloseConfirmation()` if it is rejected. If confirmed, call `requestClose()`: the updater cancels, restores every file changed in this update, then starts Minecraft and closes the view. |
 | `ALLOW` | Update succeeded | Closing is allowed; the latch is released and the window closes. |
-| `SKIP_OR_EXIT` | A fatal error escaped the update | Offer “Use trusted version”, “Retry update”, and “Exit”, calling `requestSkipUpdate()`, `requestRetryUpdate()`, and `requestClose()` respectively. Recovery launches only after signed-cache verification; retry keeps installed changes. |
+| `SKIP_OR_EXIT` | Ordinary update failure or all servers under maintenance | Ordinary failures offer trusted recovery, retry and exit. For `getErrorCode() == MAINTENANCE`, show the verbatim `getErrorMessage()` and provide access to only trusted launch and exit. JavaFX uses a top-right “View details” button to open the dialog on demand; Swing opens it directly. Closing the maintenance dialog or main window exits. Trusted launch calls `requestSkipUpdate()`, rolls back and verifies the cache; exit calls `requestClose()` and keeps installed changes without launching Minecraft. |
 | `EXIT_FAILURE` | Update failed | Any close (requested or native) calls `System.exit(1)` — **Minecraft will not start**. |
 
 > Never release the latch or call `System.exit` yourself. The controller owns both.
