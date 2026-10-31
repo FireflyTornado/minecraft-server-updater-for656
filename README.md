@@ -309,16 +309,17 @@ through the existing mirror list. Keep `file` to offer an explicit legacy
 artifact to old clients, or omit it to disable the v2 offer. Using only `file`
 preserves legacy behavior and makes v3 return 404.
 
-Platform caches use `server-<id>-<platform>.jar`; legacy caches retain
-`server-<id>.jar`. Approval remains scoped to server URL + preset id, so a
-platform change migrates the filename without another prompt. Locally
+All server preset caches use `server-<id>.jar`. A version or JVM platform change
+reuses the existing verified-download and atomic-replacement flow at that fixed
+path. Earlier test builds' platform-suffixed files are not migrated or removed.
+Approval remains scoped to server URL + preset id across platform changes. Locally
 installed marked presets are filtered by OS, architecture and Java version;
 unmarked legacy presets retain their existing startup fallback. Automatic
 Swing fallback is not remembered as a user preference. The server GUI policy
 still defaults to `disabled`; enable `recommended` or `required` as below.
 
 Run `./validation/run.ps1` with JDK 17+ and the existing Python requirements
-installed to test publication, HTTP fallback, metadata, caching and migration
+installed to test publication, HTTP fallback, metadata, caching and replacement
 without a GUI or production server. See [the Chinese deployment guide](CROSS_PLATFORM_PRESETS_CN.md)
 for the full configuration and compatibility matrix. UI startup on Linux/macOS
 still needs verification on those systems.

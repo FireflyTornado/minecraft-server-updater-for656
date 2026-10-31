@@ -102,10 +102,11 @@ server-gui=recommended
 
 ## 本地缓存与预设元数据
 
-新版服务器包保存在 `.mc-update/gui-presets/server-<id>-<platform>.jar`；旧式单包仍使用
-`server-<id>.jar`。这两类名称均保留给更新器。helper 解压目录继续按整个 JAR 的 SHA-256
-隔离，无需手工清空。已批准的服务器 URL 与 preset ID 保持信任，平台切换只更新缓存
-文件记录；更换服务器 URL 或 ID 仍需重新确认。
+服务端预设统一保存在 `.mc-update/gui-presets/server-<id>.jar`，该名称保留给更新器。
+版本更新或 JVM 平台变化时，继续在同一文件路径校验、下载并原子替换对应的包；
+服务端各平台发布文件的名称和下载地址保持不变。早期测试版带平台后缀的缓存文件不自动
+迁移或清理。helper 解压目录继续按整个 JAR 的 SHA-256 隔离，保留现有清理策略。
+已批准的服务器 URL 与 preset ID 保持信任，更换服务器 URL 或 ID 仍需重新确认。
 
 JAR 内 `META-INF/mc-update-gui.properties` 增加可选字段：
 

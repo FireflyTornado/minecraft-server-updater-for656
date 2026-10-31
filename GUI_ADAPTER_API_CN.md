@@ -331,8 +331,8 @@ jar cf my-gui.jar -C classes . -C meta META-INF
 服务端发布的预设使用与上文完全相同的 V1 或 V2 JAR 元数据。更新服务器只分发
 描述和归档，不会获得额外的 GUI 控制 API。服务端预设策略见 README。
 
-更新器会在 `.mc-update/gui-presets/` 中管理名为 `server-<id>.jar` 的旧式归档，
-以及 `server-<id>-<platform>.jar` 的平台变体；
+更新器在 `.mc-update/gui-presets/` 中统一使用 `server-<id>.jar` 保存旧式单包及平台变体，
+校验通过后在该固定路径替换对应平台或新版预设。早期测试版的带平台后缀文件不自动迁移或清理；
 手动安装的预设不要使用该保留名称。用户只需对某个 `服务器 URL + id` 批准一次；
 同一身份的新版本可以直接加载。服务器 URL 或 id 改变时会重新回到可信 Swing
 确认对话框。

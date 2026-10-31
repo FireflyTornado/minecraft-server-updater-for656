@@ -125,7 +125,7 @@ public final class ServerGuiPresetOffer {
 
     /** Return the reserved local archive name used for this server preset. */
     public String getArchiveName() {
-        return "server-" + id + (platform == null ? "" : "-" + platform.getId()) + ".jar";
+        return "server-" + id + ".jar";
     }
 
     public GuiPlatform getPlatform() { return platform; }

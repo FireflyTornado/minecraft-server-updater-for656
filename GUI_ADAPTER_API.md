@@ -341,9 +341,11 @@ above. The update server distributes the descriptor and archive; it does not
 receive any additional GUI-control API. Configure the local server-preset policy
 as described in the README.
 
-The updater owns legacy archives named `server-<id>.jar` and platform archives
-named `server-<id>-<platform>.jar` inside
-`.mc-update/gui-presets/`. Do not use that reserved name for a manually
+The updater owns server archives named `server-<id>.jar` inside
+`.mc-update/gui-presets/` for both legacy and platform-specific offers. The
+matching platform variant replaces that fixed cache file after validation.
+Earlier test builds' platform-suffixed files are not migrated or removed.
+Do not use that reserved name for a manually
 installed preset. The user approves a `server URL + id` once; a later version
 from that identity can load directly. A changed server URL or id returns to the
 trusted Swing approval dialog.
