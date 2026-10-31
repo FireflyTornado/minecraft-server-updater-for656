@@ -92,7 +92,7 @@ docker exec mc-update python3 /app/generate_manifest.py \
 ### Agent
 
 ```bash
-# Linux/macOS (requires a JDK with javac)
+# Linux/macOS (requires JDK 17 or later)
 bash agent/build.sh
 bash agent/setup-agent.sh ~/.minecraft/versions/1.20.1 http://your-server:25565 BASE64_X509_ED25519_PUBLIC_KEY
 
@@ -125,7 +125,7 @@ manifest-public-key=BASE64_X509_ED25519_PUBLIC_KEY
 # Optional: manifest-key-id=ed25519-0123456789abcdef
 ```
 
-When no public key is configured, the client shows a one-time confirmation with the server URL, key ID, and SHA-256 fingerprint; approval pins the key locally. A pinned key is never replaced automatically. The client fetches `/api/v3/manifest` and verifies the Ed25519 signature, expiry, and embedded manifest hash before touching files. The agent runtime requires Java 15 or later for Ed25519. `/api/v3/manifest-public-key` is for administrator inspection only; clients never trust it automatically. `/api/v2/manifest` remains available for legacy clients.
+When no public key is configured, the client shows a one-time confirmation with the server URL, key ID, and SHA-256 fingerprint; approval pins the key locally. A pinned key is never replaced automatically. The client fetches `/api/v3/manifest` and verifies the Ed25519 signature, expiry, and embedded manifest hash before touching files. The current core and build scripts require Java 17 or later. `/api/v3/manifest-public-key` is for administrator inspection only; clients never trust it automatically. `/api/v2/manifest` remains available for legacy clients.
 
 ## Safe skip update
 
@@ -197,7 +197,8 @@ can be blocked at the manifest endpoint but lack the dedicated dialog.
 | `/api/v3/manifest-public-key` | GET | Public-key descriptor for administrator pinning |
 | `/api/files/<path>` | GET | Download a resource file |
 | `/api/agent` | GET | Download the latest `UpdateAgent_core.jar` |
-| `/api/v2/gui-preset` | GET | Optional server GUI-preset descriptor |
+| `/api/v2/gui-preset` | GET | Optional legacy single-archive GUI-preset descriptor |
+| `/api/v3/gui-preset` | GET | Platform catalog selected by the client's JVM environment |
 | `/api/v2/gui-presets/<archive>.jar` | GET | Archive named by a GUI-preset descriptor |
 | `/api/config` | GET | Managed paths & excluded paths configuration |
 | `/api/generate` | POST | Generate configured server targets (token-protected) |
@@ -279,6 +280,48 @@ progress-reset-threshold-percent=1
 ```
 
 ### Server-published GUI presets
+
+The updated core is built for Java 17+. The existing single-archive `file`
+configuration below remains supported. To publish platform variants, add a
+`variants` object under `generation.gui_preset`:
+
+```json
+"variants": {
+  "windows-x64": "fireflytornado-javafx-preset-1.2.4-win.jar",
+  "linux-x64": "fireflytornado-javafx-preset-1.2.4-linux.jar",
+  "macos-x64": "fireflytornado-javafx-preset-1.2.4-mac.jar",
+  "macos-arm64": "fireflytornado-javafx-preset-1.2.4-mac-aarch64.jar"
+}
+```
+
+Only declared variants are required: a Windows-only mapping is valid. Rebuild
+the preset with the updated build script so each JAR declares `target-os` and
+`target-arch`; the server verifies these fields and the version, reads
+`minimum-java-version` from the helper runtime manifest, and computes hashes
+and sizes before atomically publishing one descriptor. Missing or invalid
+declared files leave the previous descriptor intact.
+
+The new client reads `/api/v3/gui-preset` and selects the exact OS/JVM
+architecture and a supported Java version. No compatible variant means Swing.
+It tries v2 only when v3 returns 404/405, never for a valid unmatched catalog,
+invalid JSON, or server/transfer failures. A changed server may still be tried
+through the existing mirror list. Keep `file` to offer an explicit legacy
+artifact to old clients, or omit it to disable the v2 offer. Using only `file`
+preserves legacy behavior and makes v3 return 404.
+
+Platform caches use `server-<id>-<platform>.jar`; legacy caches retain
+`server-<id>.jar`. Approval remains scoped to server URL + preset id, so a
+platform change migrates the filename without another prompt. Locally
+installed marked presets are filtered by OS, architecture and Java version;
+unmarked legacy presets retain their existing startup fallback. Automatic
+Swing fallback is not remembered as a user preference. The server GUI policy
+still defaults to `disabled`; enable `recommended` or `required` as below.
+
+Run `./validation/run.ps1` with JDK 17+ and the existing Python requirements
+installed to test publication, HTTP fallback, metadata, caching and migration
+without a GUI or production server. See [the Chinese deployment guide](CROSS_PLATFORM_PRESETS_CN.md)
+for the full configuration and compatibility matrix. UI startup on Linux/macOS
+still needs verification on those systems.
 
 A server can publish one optional GUI preset outside the normal game-file
 manifest. The configured update server is the trust boundary: the client checks

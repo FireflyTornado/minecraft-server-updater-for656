@@ -331,10 +331,18 @@ jar cf my-gui.jar -C classes . -C meta META-INF
 服务端发布的预设使用与上文完全相同的 V1 或 V2 JAR 元数据。更新服务器只分发
 描述和归档，不会获得额外的 GUI 控制 API。服务端预设策略见 README。
 
-更新器会在 `.mc-update/gui-presets/` 中管理名为 `server-<id>.jar` 的归档；
+更新器会在 `.mc-update/gui-presets/` 中管理名为 `server-<id>.jar` 的旧式归档，
+以及 `server-<id>-<platform>.jar` 的平台变体；
 手动安装的预设不要使用该保留名称。用户只需对某个 `服务器 URL + id` 批准一次；
 同一身份的新版本可以直接加载。服务器 URL 或 id 改变时会重新回到可信 Swing
 确认对话框。
+
+多平台 V2 预设在 `META-INF/mc-update-gui.properties` 同时声明 `target-os` 和
+`target-arch`，例如 `windows` / `x64`；系统规范值为 `windows`、`linux`、`macos`，
+架构规范值为 `x64`、`arm64`。未声明的旧预设仍可按旧路径加载，只有一个字段或值无效
+的包不可选。本地发现阶段读取运行时清单并检查最低 Java 版本，不执行预设代码。
+服务端 v3 变体还会在下载后检查其平台、版本及最低 Java 版本与描述一致。
+详细发布格式及兼容规则见 [多平台预设指南](CROSS_PLATFORM_PRESETS_CN.md)。
 
 #### 选择与回退行为
 

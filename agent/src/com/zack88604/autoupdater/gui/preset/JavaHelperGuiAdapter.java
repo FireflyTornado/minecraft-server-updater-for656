@@ -64,6 +64,9 @@ public final class JavaHelperGuiAdapter implements GuiAdapter {
         if (!preset.usesJavaHelperRuntime()) {
             throw new IllegalArgumentException("Preset does not declare a Java helper runtime");
         }
+        if (!preset.isCompatible()) {
+            throw new IOException("GUI preset is incompatible with this Java environment");
+        }
 
         JavaHelperRuntimeInstaller.PreparedRuntime runtime =
                 JavaHelperRuntimeInstaller.prepare(preset,
@@ -264,7 +267,7 @@ public final class JavaHelperGuiAdapter implements GuiAdapter {
     }
 
     private static String javaExecutable() {
-        String extension = System.getProperty("os.name", "").toLowerCase().contains("win")
+        String extension = "windows".equals(GuiPlatform.current().getOs())
                 ? ".exe" : "";
         File executable = new File(new File(System.getProperty("java.home"), "bin"),
                 "java" + extension);

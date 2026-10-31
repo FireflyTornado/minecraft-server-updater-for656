@@ -341,11 +341,23 @@ above. The update server distributes the descriptor and archive; it does not
 receive any additional GUI-control API. Configure the local server-preset policy
 as described in the README.
 
-The updater owns archives named `server-<id>.jar` inside
+The updater owns legacy archives named `server-<id>.jar` and platform archives
+named `server-<id>-<platform>.jar` inside
 `.mc-update/gui-presets/`. Do not use that reserved name for a manually
 installed preset. The user approves a `server URL + id` once; a later version
 from that identity can load directly. A changed server URL or id returns to the
 trusted Swing approval dialog.
+
+Platform-specific V2 presets declare both `target-os` and `target-arch` in
+`META-INF/mc-update-gui.properties`, for example `windows` / `x64`. Canonical
+OS values are `windows`, `linux`, `macos`; architectures are `x64`, `arm64`.
+An unmarked legacy preset remains loadable through its old compatibility
+path; incomplete or invalid platform declarations are rejected. Discovery
+checks the current JVM platform and the runtime manifest's minimum Java
+version before loading any preset classes. Downloaded v3 variants must also
+match the advertised platform, preset version, and minimum Java version.
+Approval remains server URL + id across platform changes. See
+[the deployment guide](CROSS_PLATFORM_PRESETS_CN.md) for the v3 schema and compatibility.
 
 #### Selection & fallback behavior
 

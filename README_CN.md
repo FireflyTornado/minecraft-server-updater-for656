@@ -12,6 +12,7 @@
 |------|----------|------|
 | `README.md` / `README_CN.md` | 运维人员与维护者 | 构建、部署、配置与仓库导航。 |
 | `GUI_ADAPTER_API.md` / `GUI_ADAPTER_API_CN.md` | GUI 开发者 | 对外 GUI 契约、V1 预设与 V2 隔离 Java helper 预设。 |
+| `CROSS_PLATFORM_PRESETS_CN.md` | 运维人员与 GUI 开发者 | 多平台发布配置、部分平台发布、新旧接口及缓存迁移。 |
 
 ## 简介
 
@@ -92,7 +93,7 @@ docker exec mc-update python3 /app/generate_manifest.py \
 ### Agent
 
 ```bash
-# Linux/macOS（需要带 javac 的 JDK）
+# Linux/macOS（需要 JDK 17 或更高版本）
 bash agent/build.sh
 bash agent/setup-agent.sh ~/.minecraft/versions/1.20.1 http://your-server:25565 BASE64_X509_ED25519_PUBLIC_KEY
 
@@ -125,7 +126,7 @@ manifest-public-key=BASE64_X509_ED25519_PUBLIC_KEY
 # 可选：manifest-key-id=ed25519-0123456789abcdef
 ```
 
-未配置公钥时，客户端会一次性显示服务器地址、key ID 与 SHA-256 指纹供用户确认；同意后会固定该密钥，之后绝不自动替换。客户端从 `/api/v3/manifest` 获取清单，在改动任何文件前验证 Ed25519 签名、有效期和内嵌清单哈希。Ed25519 需要 Java 15 或更高版本。`/api/v3/manifest-public-key` 仅用于管理员检查，客户端绝不自动信任它。`/api/v2/manifest` 保留给旧客户端。
+未配置公钥时，客户端会一次性显示服务器地址、key ID 与 SHA-256 指纹供用户确认；同意后会固定该密钥，之后绝不自动替换。客户端从 `/api/v3/manifest` 获取清单，在改动任何文件前验证 Ed25519 签名、有效期和内嵌清单哈希。当前核心以 Java 17 为目标构建，运行及构建均要求 Java 17 或更高版本。`/api/v3/manifest-public-key` 仅用于管理员检查，客户端绝不自动信任它。`/api/v2/manifest` 保留给旧客户端。
 
 ## 安全跳过更新
 
@@ -174,7 +175,8 @@ manifest-public-key=BASE64_X509_ED25519_PUBLIC_KEY
 | `/api/v3/manifest-public-key` | GET | 供管理员固定公钥的公开密钥描述 |
 | `/api/files/<path>` | GET | 下载指定资源文件 |
 | `/api/agent` | GET | 下载最新 `UpdateAgent_core.jar` |
-| `/api/v2/gui-preset` | GET | 可选的服务端 GUI 预设描述 |
+| `/api/v2/gui-preset` | GET | 兼容旧客户端的可选单包 GUI 预设描述 |
+| `/api/v3/gui-preset` | GET | GUI 预设多平台清单，由客户端按 JVM 环境选择变体 |
 | `/api/v2/gui-presets/<archive>.jar` | GET | 描述文件指定的预设 JAR |
 | `/api/config` | GET | 管理路径与排除路径配置 |
 | `/api/generate` | POST | 生成已配置的服务端目标（Token 保护） |
@@ -255,6 +257,10 @@ progress-reset-threshold-percent=1
 ```
 
 ### 服务端发布 GUI 预设
+
+新版核心与构建产物要求 Java 17+。多平台发布使用可选的 `variants` 映射，允许只配置
+并上传 Windows 包；其他平台自动使用 Swing。完整配置和迁移步骤见
+[多平台 GUI 预设发布与迁移](CROSS_PLATFORM_PRESETS_CN.md)。以下原有 `file` 单包配置继续兼容。
 
 服务器可以在普通游戏文件清单之外发布一个可选 GUI 预设。配置的更新服务器就是
 信任边界：客户端会校验描述文件结构、下载 JAR 的 SHA-256 与大小，并在首次加载每个

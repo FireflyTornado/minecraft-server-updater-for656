@@ -93,7 +93,7 @@ public final class GuiPresetStore {
         for (File archive : archives) {
             File directArchive = resolveDirectPresetArchive(archive);
             GuiPreset preset = directArchive == null ? null : readMetadata(directArchive);
-            if (preset != null) {
+            if (preset != null && preset.isCompatible()) {
                 presets.add(preset);
             }
         }
@@ -213,8 +213,19 @@ public final class GuiPresetStore {
 
     /** Return whether a remembered selection uses a reserved server-managed archive. */
     public boolean isServerPresetSelection(GuiPresetSelection selection,
-                                           ServerGuiPresetTrust trust) {
-        if (selection == null || selection.isSwing()) {
+                                           ServerGuiPresetTrust trust) throws IOException {
+        if (selection == null) {
+            // A platform change can hide the previously selected server archive.
+            // Keep refreshing that server choice instead of treating it as a new local choice.
+            if (!selectionFile.isFile()) return false;
+            Properties values = new Properties();
+            try (InputStream input = new FileInputStream(selectionFile)) { values.load(input); }
+            String previous = values.getProperty(KEY_ARCHIVE, "");
+            return "true".equalsIgnoreCase(values.getProperty(KEY_REMEMBER))
+                    && MODE_PRESET.equals(values.getProperty(KEY_MODE))
+                    && previous.startsWith("server-") && previous.endsWith(".jar");
+        }
+        if (selection.isSwing()) {
             return false;
         }
         String archiveName = selection.getPreset().getArchiveName();
@@ -223,9 +234,13 @@ public final class GuiPresetStore {
     }
 
     /** Return the reserved direct-child archive location for a validated server preset id. */
-    File getServerPresetArchive(String presetId) throws IOException {
+    File getServerPresetArchive(ServerGuiPresetOffer offer) throws IOException {
         ensureDirectories();
-        return new File(presetDirectory, "server-" + presetId + ".jar");
+        File destination = new File(presetDirectory, offer.getArchiveName());
+        if (!presetDirectory.getCanonicalFile().equals(destination.getCanonicalFile().getParentFile())) {
+            throw new IOException("Invalid server GUI preset destination");
+        }
+        return destination;
     }
 
     /** Atomically replace one server-managed archive after hash verification. */
@@ -266,7 +281,7 @@ public final class GuiPresetStore {
         }
     }
 
-    private static GuiPreset readMetadata(File archive) {
+    static GuiPreset readMetadata(File archive) {
         try (JarFile jar = new JarFile(archive)) {
             JarEntry metadata = jar.getJarEntry(PRESET_METADATA_PATH);
             if (metadata == null || metadata.getSize() > MAX_METADATA_SIZE) {
@@ -297,9 +312,17 @@ public final class GuiPresetStore {
                 displayName = stripJarExtension(archive.getName());
             }
             String version = trim(values.getProperty("version"));
-            return new GuiPreset(archive, displayName, version, factoryClassName,
+            String targetOs = trim(values.getProperty("target-os"));
+            String targetArch = trim(values.getProperty("target-arch"));
+            GuiPlatform target = values.containsKey("target-os") || values.containsKey("target-arch")
+                    ? GuiPlatform.declared(targetOs, targetArch) : null;
+            GuiPreset preset = new GuiPreset(archive, displayName, version, factoryClassName,
                     runtimeKind, runtimeManifestPath);
-        } catch (IOException ignored) {
+            int minimum = runtimeKind == GuiPreset.RuntimeKind.JAVA_HELPER
+                    ? JavaHelperRuntimeManifest.read(preset).getMinimumJavaVersion() : 8;
+            return new GuiPreset(archive, displayName, version, factoryClassName,
+                    runtimeKind, runtimeManifestPath, target, minimum);
+        } catch (IOException | IllegalArgumentException ignored) {
             return null;
         }
     }

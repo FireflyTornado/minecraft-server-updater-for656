@@ -7,18 +7,15 @@ Provides manifest queries, file downloads, and more.
 import os
 import sys
 import json
-import hashlib
 import logging
 import mimetypes
 import re
 import subprocess
 import tempfile
-import zipfile
-
-from urllib.parse import quote
 
 from flask import Flask, jsonify, send_file, abort, request
 from manifest_signing import public_key_descriptor, sign_manifest
+from gui_presets import validate_source, build_descriptor, public_descriptor, unique_object
 
 # Configuration
 DATA_DIR = os.environ.get('DATA_DIR', '/data')
@@ -30,7 +27,6 @@ CONFIG_PATH = os.path.join(DATA_DIR, 'update-config.json')
 GUI_PRESETS_DIR = os.path.join(DATA_DIR, 'gui-presets')
 GUI_PRESET_CONFIG_PATH = os.path.join(DATA_DIR, 'gui-preset.json')
 
-_SAFE_GUI_ID = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$')
 _SAFE_GUI_ARCHIVE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,127}\.jar$')
 _GENERATION_TARGETS = frozenset(('manifest', 'gui-preset'))
 
@@ -103,21 +99,13 @@ def _load_manifest():
         return None
 
 
-def _sha256(filepath):
-    digest = hashlib.sha256()
-    with open(filepath, 'rb') as source:
-        for chunk in iter(lambda: source.read(8192), b''):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
 def _load_update_config():
     """Load operator configuration, using an empty object when it is absent."""
     if not os.path.isfile(CONFIG_PATH):
         return {}
     try:
         with open(CONFIG_PATH, 'r', encoding='utf-8') as source:
-            value = json.load(source)
+            value = json.load(source, object_pairs_hook=unique_object)
     except (json.JSONDecodeError, OSError) as error:
         raise ValueError(f'failed to load update-config.json: {error}')
     if not isinstance(value, dict):
@@ -155,23 +143,7 @@ def _maintenance_response():
 
 
 def _validate_gui_preset_source(value):
-    """Validate the administrator-maintained preset declaration."""
-    if not isinstance(value, dict):
-        raise ValueError('generation.gui_preset must be an object')
-    preset_id = value.get('id')
-    version = value.get('version')
-    filename = value.get('file')
-    if not all(isinstance(item, str) and item for item in
-               (preset_id, version, filename)):
-        raise ValueError('generation.gui_preset requires id, version, and file')
-    if (not _SAFE_GUI_ID.fullmatch(preset_id)
-            or not _SAFE_GUI_ARCHIVE.fullmatch(filename)
-            or len(version) > 128
-            or version != version.strip()
-            or any(ord(character) < 32 or ord(character) == 127
-                   for character in version)):
-        raise ValueError('generation.gui_preset contains an invalid id, version, or archive name')
-    return preset_id, version, filename
+    return validate_source(value)
 
 
 def _load_generation_configuration():
@@ -196,21 +168,7 @@ def _load_generation_configuration():
 
 
 def _build_gui_preset_descriptor(preset_source):
-    """Build a descriptor from a manually installed archive without publishing it."""
-    preset_id, version, filename = _validate_gui_preset_source(preset_source)
-    archive = os.path.join(GUI_PRESETS_DIR, filename)
-    if not os.path.isfile(archive):
-        raise ValueError(f'preset archive is missing: {filename}')
-    if not zipfile.is_zipfile(archive):
-        raise ValueError(f'preset archive is not a valid JAR/ZIP file: {filename}')
-    return {
-        'id': preset_id,
-        'version': version,
-        'file': filename,
-        'path': '/api/v2/gui-presets/' + quote(filename, safe=''),
-        'sha256': _sha256(archive),
-        'size': os.path.getsize(archive),
-    }
+    return build_descriptor(preset_source, GUI_PRESETS_DIR)
 
 
 def _write_json_atomically(path, value):
@@ -230,36 +188,25 @@ def _write_json_atomically(path, value):
             os.unlink(temporary)
 
 
-def _load_gui_preset_offer():
-    """Load the published descriptor and verify its archive remains unchanged."""
+def _load_gui_preset_publication():
+    """Read one atomic publication shared by both protocol versions."""
     if not os.path.isfile(GUI_PRESET_CONFIG_PATH):
         return None
+    with open(GUI_PRESET_CONFIG_PATH, 'r', encoding='utf-8') as source:
+        descriptor = json.load(source, object_pairs_hook=unique_object)
+    if not isinstance(descriptor, dict):
+        raise ValueError('published GUI preset must be an object')
+    return public_descriptor(descriptor, GUI_PRESETS_DIR)
+
+
+def _load_gui_preset_offer():
     try:
-        with open(GUI_PRESET_CONFIG_PATH, 'r', encoding='utf-8') as source:
-            descriptor = json.load(source)
-        preset_id, version, filename = _validate_gui_preset_source(descriptor)
-        path = descriptor.get('path')
-        expected_path = '/api/v2/gui-presets/' + quote(filename, safe='')
-        archive_hash = descriptor.get('sha256')
-        size = descriptor.get('size')
-        if (path != expected_path or not isinstance(archive_hash, str)
-                or not re.fullmatch(r'[0-9A-Fa-f]{64}', archive_hash)
-                or not isinstance(size, int) or size < 0):
-            raise ValueError('published descriptor is invalid')
-        archive = os.path.join(GUI_PRESETS_DIR, filename)
-        if (not os.path.isfile(archive) or os.path.getsize(archive) != size
-                or _sha256(archive) != archive_hash.lower()):
-            raise ValueError(f'published preset archive no longer matches: {filename}')
-        return {
-            'id': preset_id,
-            'version': version,
-            'path': path,
-            'sha256': archive_hash.lower(),
-            'size': size,
-        }
-    except (json.JSONDecodeError, OSError, ValueError) as error:
+        descriptor = _load_gui_preset_publication()
+        if descriptor is not None and 'path' in descriptor:
+            return {key: descriptor[key] for key in ('id', 'version', 'path', 'sha256', 'size')}
+    except (OSError, ValueError) as error:
         logger.error(f"Failed to load GUI preset offer: {error}")
-        return None
+    return None
 
 @app.route('/api/manifest', methods=['GET'])
 def api_manifest_v1():
@@ -342,6 +289,24 @@ def api_gui_preset_download(filename):
     return send_file(archive, mimetype='application/java-archive', as_attachment=False)
 
 
+@app.route('/api/v3/gui-preset', methods=['GET'])
+def api_gui_preset_v3():
+    """Return the configured platform variants; never downgrade invalid publications."""
+    try:
+        descriptor = _load_gui_preset_publication()
+    except (OSError, ValueError) as error:
+        logger.error('Failed to load GUI preset publication: %s', error)
+        response = jsonify({'error': 'GUI preset publication is invalid'})
+        response.status_code = 503
+        response.headers['Cache-Control'] = 'no-store'
+        return response
+    if descriptor is None or 'variants' not in descriptor:
+        abort(404)
+    response = jsonify({key: descriptor[key] for key in ('id', 'version', 'variants')})
+    response.headers['Cache-Control'] = 'no-store'
+    return response
+
+
 @app.route('/api/files/<path:filepath>', methods=['GET'])
 def api_download(filepath):
     """Download a single resource file."""
@@ -401,7 +366,7 @@ def api_generate():
         targets, preset_source = _load_generation_configuration()
         descriptor = (_build_gui_preset_descriptor(preset_source)
                       if 'gui-preset' in targets else None)
-    except ValueError as error:
+    except (ValueError, OSError) as error:
         logger.warning("Generate request rejected: %s", error)
         return jsonify({'error': str(error)}), 400
 
@@ -453,7 +418,8 @@ def api_generate():
     response = {'status': 'ok', 'targets': targets, 'output': output}
     if descriptor is not None:
         response['gui_preset'] = {
-            key: descriptor[key] for key in ('id', 'version', 'path', 'sha256', 'size')
+            key: descriptor[key] for key in ('id', 'version', 'path', 'sha256', 'size', 'variants')
+            if key in descriptor
         }
     return jsonify(response)
 
