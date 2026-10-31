@@ -10,8 +10,8 @@
 
 | File | Audience | Purpose |
 |------|----------|---------|
-| `README.md` / `README_CN.md` | Operators and maintainers | Build, deploy, configure, and navigate the repository. |
-| `GUI_ADAPTER_API.md` / `GUI_ADAPTER_API_CN.md` | GUI developers | Public GUI contract, V1 presets, and V2 isolated Java-helper presets. |
+| `README.md` / `README_CN.md` | Operators and maintainers | Build, deployment, configuration and platform preset publication. |
+| `GUI_ADAPTER_API.md` / `GUI_ADAPTER_API_CN.md` | GUI developers | Public GUI contract, preset protocol and metadata, and V1/V2 adapter development. |
 
 ## Overview
 
@@ -281,61 +281,29 @@ progress-reset-threshold-percent=1
 
 ### Server-published GUI presets
 
-The updated core is built for Java 17+. The existing single-archive `file`
-configuration below remains supported. To publish platform variants, add a
-`variants` object under `generation.gui_preset`:
+A server can publish an optional GUI preset outside the game-file manifest,
+with separate archives for different platforms. The client selects a compatible
+archive using the OS, architecture and Java version of the JVM that launches
+Minecraft. The core requires Java 17+ and must also meet the selected preset's
+minimum Java version.
 
-```json
-"variants": {
-  "windows-x64": "fireflytornado-javafx-preset-1.2.4-win.jar",
-  "linux-x64": "fireflytornado-javafx-preset-1.2.4-linux.jar",
-  "macos-x64": "fireflytornado-javafx-preset-1.2.4-mac.jar",
-  "macos-arm64": "fireflytornado-javafx-preset-1.2.4-mac-aarch64.jar"
-}
-```
+#### Platforms and publication configuration
 
-Only declared variants are required: a Windows-only mapping is valid. Rebuild
-the preset with the updated build script so each JAR declares `target-os` and
-`target-arch`; the server verifies these fields and the version, reads
-`minimum-java-version` from the helper runtime manifest, and computes hashes
-and sizes before atomically publishing one descriptor. Missing or invalid
-declared files leave the previous descriptor intact.
+| Platform identifier | JVM environment | Example filename suffix |
+|---------------------|-----------------|-------------------------|
+| `windows-x64` | Windows x64 | `win.jar` |
+| `linux-x64` | Linux x64 | `linux.jar` |
+| `macos-x64` | macOS x64 | `mac.jar` |
+| `macos-arm64` | macOS ARM64 | `mac-aarch64.jar` |
 
-The new client reads `/api/v3/gui-preset` and selects the exact OS/JVM
-architecture and a supported Java version. No compatible variant means Swing.
-It tries v2 only when v3 returns 404/405, never for a valid unmatched catalog,
-invalid JSON, or server/transfer failures. A changed server may still be tried
-through the existing mirror list. Keep `file` to offer an explicit legacy
-artifact to old clients, or omit it to disable the v2 offer. Using only `file`
-preserves legacy behavior and makes v3 return 404.
+`amd64` / `x86_64` / `x64` normalize to x64; `aarch64` / `arm64` normalize to
+ARM64. Apple Silicon running x64 Java selects the macOS x64 archive. Unknown
+systems, 32-bit JVMs and environments without a compatible variant use Swing;
+the normal resource-update flow continues.
 
-All server preset caches use `server-<id>.jar`. A version or JVM platform change
-reuses the existing verified-download and atomic-replacement flow at that fixed
-path. Earlier test builds' platform-suffixed files are not migrated or removed.
-Approval remains scoped to server URL + preset id across platform changes. Locally
-installed marked presets are filtered by OS, architecture and Java version;
-unmarked legacy presets retain their existing startup fallback. Automatic
-Swing fallback is not remembered as a user preference. The server GUI policy
-still defaults to `disabled`; enable `recommended` or `required` as below.
-
-Run `./validation/run.ps1` with JDK 17+ and the existing Python requirements
-installed to test publication, HTTP fallback, metadata, caching and replacement
-without a GUI or production server. See [the Chinese deployment guide](CROSS_PLATFORM_PRESETS_CN.md)
-for the full configuration and compatibility matrix. UI startup on Linux/macOS
-still needs verification on those systems.
-
-A server can publish one optional GUI preset outside the normal game-file
-manifest. The configured update server is the trust boundary: the client checks
-the descriptor shape plus the downloaded JAR's SHA-256 and size, then asks the
-user before first loading each `server URL + preset id` identity. Remote GUI
-loading is disabled by default.
-
-The server administrator installs the JAR manually under the mounted data
-volume, for example:
-
-    /srv/mc-update/gui-presets/example-javafx-1.2.0.jar
-
-Then configure the publication target in `/srv/mc-update/update-config.json`:
+Upload the required JARs to `/srv/mc-update/gui-presets/`, then merge the
+`generation` block into the existing `/srv/mc-update/update-config.json`,
+preserving other sync and maintenance settings:
 
 ```json
 {
@@ -345,40 +313,105 @@ Then configure the publication target in `/srv/mc-update/update-config.json`:
     "targets": ["manifest", "gui-preset"],
     "gui_preset": {
       "id": "example-javafx",
-      "version": "1.2.0",
-      "file": "example-javafx-1.2.0.jar"
+      "version": "1.0.0",
+      "file": "example-javafx-1.0.0-win.jar",
+      "variants": {
+        "windows-x64": "example-javafx-1.0.0-win.jar",
+        "linux-x64": "example-javafx-1.0.0-linux.jar",
+        "macos-x64": "example-javafx-1.0.0-mac.jar",
+        "macos-arm64": "example-javafx-1.0.0-mac-aarch64.jar"
+      }
     }
   }
 }
 ```
 
-When `GENERATE_TOKEN` is configured, pass it when triggering publication
-without entering the container or uploading code through HTTP:
+- `variants` maps platform identifiers to filenames. A Windows-only mapping is
+  valid and requires only the Windows archive. Every declared file must exist;
+  an empty or `null` mapping is invalid.
+- `file` is an optional single-archive entry for legacy clients. Omit it if
+  legacy support is unnecessary; configuring only `file` preserves single-archive
+  publication. An unmatched v3 catalog does not trigger a v2 download from the
+  same server.
+- Each variant must declare the configured platform and version in its metadata.
+  The minimum Java version is read from its runtime manifest. See
+  [GUI API: archive metadata](GUI_ADAPTER_API.md#71-archive-metadata).
+- The filenames above are generic examples. For a concrete preset such as
+  [FireflyTornado JavaFX UI Preset](https://github.com/FireflyTornado/UI-preset-for-Zack88604-Minecraft-server-updater),
+  follow its README to build and use its actual filenames and version.
 
-    curl -X POST https://update.example.com/api/generate \
-      -H "X-Generate-Token: $GENERATE_TOKEN"
+#### Generate and verify
 
-`/api/generate` reads only this server-side configuration. It validates the
-manually installed JAR, computes its hash and size, and atomically replaces
-`/srv/mc-update/gui-preset.json` only after validation succeeds. With no
-`generation` block, the backward-compatible default target is `["manifest"]`.
-The client-facing `/api/config` exposes only `managed_paths` and
-`excluded_paths`, never `generation`.
+When `GENERATE_TOKEN` is configured, include the existing token in the request:
 
-Enable the optional policy on clients:
+```bash
+curl -fsS -X POST https://update.example.com/api/generate \
+  -H "X-Generate-Token: $GENERATE_TOKEN"
+```
 
-    server-gui=recommended
+`/api/generate` reads server-side configuration and does not upload code. After
+validating all declared files, it computes SHA-256 hashes and sizes and atomically
+replaces `/srv/mc-update/gui-preset.json`. An invalid declaration or missing file
+rejects preset publication and leaves the previous preset descriptor unchanged.
+Without a `generation` block, the default target is `["manifest"]`.
+`/api/config` exposes only `managed_paths` and `excluded_paths`, never `generation`.
 
-`recommended` uses the server preset only when no remembered local choice wins,
-while refreshing a selected server preset. `required` overrides a remembered
-local choice only after the same server and preset identity has been approved.
-`disabled` is the default. An explicit `gui-adapter` class always takes
-precedence.
+Check the platform catalog after publication; the legacy endpoint is also
+available when `file` is configured:
 
-The first use of a server URL + preset id shows an external-code risk warning.
-A later version of that identity does not prompt again; changing the server URL
-or preset id does. Use HTTPS in production. When configured, the generation Token protects publishing, not client
-downloads, and must never be placed in client configuration. Existing key-based approval records require one fresh confirmation after this upgrade.
+```bash
+curl -fsS https://update.example.com/api/v3/gui-preset
+curl -fsS https://update.example.com/api/v2/gui-preset
+```
+
+The descriptor format is documented in
+[GUI API: server-published presets](GUI_ADAPTER_API.md#server-published-presets).
+
+#### Client policy and compatibility
+
+Enable the feature in the game directory's `mc-update.properties`:
+
+```properties
+server-gui=recommended
+```
+
+`disabled` (default) does not query server offers. `recommended` respects a
+remembered local choice and refreshes a selected server preset. `required`
+prefers the server preset. An explicit `gui-adapter` always takes precedence.
+First use of each `server URL + preset id` identity requires user approval;
+version or platform changes retain that identity. An incompatible archive,
+failed download/verification or helper startup failure falls back to Swing.
+Automatic fallback is not remembered as a user preference.
+
+| Client / server capability | Behavior |
+|----------------------------|----------|
+| v3-capable client / platform publication | Selects an exact compatible variant; otherwise Swing |
+| v3-capable client / old server or only `file` configured | Tries v2 only after v3 returns 404/405 |
+| v2-only client / server offering `file` | Uses that single archive without platform selection |
+| Invalid v3, HTTP 503 or failed download | No v2 downgrade on the same server; other configured mirrors may be tried |
+
+The client uses `.mc-update/gui-presets/server-<id>.jar`, verifying and atomically
+replacing the same file when the version or JVM platform changes. Runtime-cache
+behavior is described in [GUI API: runtime manifest](GUI_ADAPTER_API.md#72-runtime-manifest).
+
+#### Version publication and CDN
+
+Use a new version and filename when preset content changes, retaining the same
+`id`. Upload the required platform archives, then update the configuration and
+generate the descriptors. For initial platform support, prepare the preset
+archives first, deploy the server supporting both APIs, then distribute the
+v3-capable core. Existing clients install a downloaded core update on their next
+launch.
+
+Prewarm the `/api/v2/gui-presets/<archive>.jar` file URLs named by the catalog's
+`path` fields. `/api/v3/gui-preset` and `/api/v2/gui-preset` are dynamic descriptors
+and must bypass CDN caching. When replacing an already cached filename, purge
+that file's CDN cache before prewarming and verify the CDN's actual size and
+hash; inconsistent archives are rejected and cause Swing fallback.
+
+Use HTTPS in production. `GENERATE_TOKEN` protects publication, not client
+downloads, and should not be distributed in client configuration. Test each
+platform's window behavior on the corresponding OS and JVM.
 
 ### Selective Sync (`update-config.json`)
 
@@ -412,6 +445,7 @@ cleaned up. Defaults: `managed_paths: ["*"]`, `excluded_paths: []`.
 │   ├── app.py                            # Flask API
 │   ├── entrypoint.sh                     # container entrypoint
 │   ├── generate_manifest.py              # manifest generator
+│   ├── gui_presets.py                    # single-archive and platform preset publication validation
 │   └── requirements.txt
 └── agent/
     ├── META-INF/MANIFEST.MF              # java-agent launcher manifest
