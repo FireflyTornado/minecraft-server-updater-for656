@@ -32,13 +32,21 @@ public final class ServerGuiPresetTransport {
             if (server == null) {
                 continue;
             }
-            try {
-                return new Response(server, getUtf8(server + endpoint));
-            } catch (IOException ignored) {
-                // A missing optional offer or unavailable mirror is not fatal.
-            }
+            Response response = fetchDescriptorAttempt(server, endpoint);
+            if (response != null && response.getStatusCode() == HttpURLConnection.HTTP_OK) return response;
         }
         return null;
+    }
+
+    /** Preserve HTTP status so only an absent endpoint permits a v2 retry. */
+    public Response fetchDescriptorAttempt(String rawServer, String endpoint) {
+        String server = normalizeServer(rawServer);
+        if (server == null) return null;
+        try {
+            return getUtf8(server, endpoint);
+        } catch (IOException ignored) {
+            return null;
+        }
     }
 
     /** Download from the same mirror that supplied the descriptor. */
@@ -101,13 +109,12 @@ public final class ServerGuiPresetTransport {
         }
     }
 
-    private static String getUtf8(String url) throws IOException {
+    private static Response getUtf8(String server, String endpoint) throws IOException {
         HttpURLConnection connection = null;
         try {
-            connection = open(url);
-            if (connection.getResponseCode() != HttpURLConnection.HTTP_OK) {
-                throw new IOException("Unexpected HTTP status");
-            }
+            connection = open(server + endpoint);
+            int status = connection.getResponseCode();
+            if (status != HttpURLConnection.HTTP_OK) return new Response(server, "", status);
             long length = connection.getContentLengthLong();
             if (length > MAX_DESCRIPTOR_BYTES) {
                 throw new IOException("GUI preset descriptor is too large");
@@ -122,7 +129,7 @@ public final class ServerGuiPresetTransport {
                     }
                     output.write(buffer, 0, read);
                 }
-                return output.toString(StandardCharsets.UTF_8.name());
+                return new Response(server, output.toString(StandardCharsets.UTF_8.name()), status);
             }
         } finally {
             if (connection != null) {
@@ -146,10 +153,12 @@ public final class ServerGuiPresetTransport {
     public static final class Response {
         private final String serverUrl;
         private final String body;
+        private final int statusCode;
 
-        private Response(String serverUrl, String body) {
+        private Response(String serverUrl, String body, int statusCode) {
             this.serverUrl = serverUrl;
             this.body = body;
+            this.statusCode = statusCode;
         }
 
         public String getServerUrl() {
@@ -159,5 +168,7 @@ public final class ServerGuiPresetTransport {
         public String getBody() {
             return body;
         }
+
+        public int getStatusCode() { return statusCode; }
     }
 }

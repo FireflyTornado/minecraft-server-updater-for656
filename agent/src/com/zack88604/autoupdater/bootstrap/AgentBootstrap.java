@@ -120,8 +120,8 @@ public final class AgentBootstrap {
      *
      * <p>A remembered local Swing or local-preset selection wins in recommended
      * mode. A remembered server preset is refreshed when its originating server
-     * remains configured, and can continue from its locally verified cache when
-     * that server is temporarily unavailable.</p>
+     * remains configured. An unavailable or incompatible server preset falls
+     * back to Swing without remembering that fallback as a user preference.</p>
      */
     private static GuiPresetSelection resolveServerPresetSelection(AgentConfig config,
                                                                     GuiPresetStore presetStore,
@@ -148,10 +148,11 @@ public final class AgentBootstrap {
             return selection;
         }
 
-        ServerGuiPresetManager.InstalledPreset installed = new ServerGuiPresetManager().install(
+        ServerGuiPresetManager.Resolution resolution = new ServerGuiPresetManager().resolve(
                 servers, presetStore);
+        ServerGuiPresetManager.InstalledPreset installed = resolution.getInstalled();
         if (installed == null) {
-            return mode == ServerGuiMode.REQUIRED || selectedServerPreset
+            return mode == ServerGuiMode.REQUIRED || selectedServerPreset || resolution.hasOffer()
                     ? GuiPresetSelection.swing(false) : selection;
         }
 
@@ -163,19 +164,21 @@ public final class AgentBootstrap {
                 return mode == ServerGuiMode.REQUIRED || selection == null
                         ? GuiPresetSelection.swing(false) : selection;
             }
-            try {
-                presetStore.saveServerTrust(installed.toTrustRecord());
-            } catch (IOException error) {
-                // The approved JAR may run once, but approval is not retained.
-                System.err.println("Unable to save server GUI trust: " + error.getMessage());
-                return GuiPresetSelection.preset(installed.getPreset(), false);
-            }
+        }
+        // Approval is for URL + preset id. Update the cached filename separately
+        // when migrating a legacy selection or changing JVM platform.
+        try {
+            presetStore.saveServerTrust(installed.toTrustRecord());
+        } catch (IOException error) {
+            System.err.println("Unable to save server GUI trust: " + error.getMessage());
+            return GuiPresetSelection.preset(installed.getPreset(), false);
         }
         return GuiPresetSelection.preset(installed.getPreset(), true);
     }
 
     private static GuiAdapter createPresetAdapter(GuiPreset preset, GuiAdapterContext context)
             throws IOException {
+        if (!preset.isCompatible()) throw new IOException("Incompatible GUI preset platform or Java version");
         ExternalGuiAdapterFactoryLoader loader = new ExternalGuiAdapterFactoryLoader();
         if (preset.usesJavaHelperRuntime()) {
             JavaHelperGuiPresetFactory factory = loader.loadJavaHelper(preset);

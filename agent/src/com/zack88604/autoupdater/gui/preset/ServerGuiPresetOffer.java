@@ -1,8 +1,9 @@
 package com.zack88604.autoupdater.gui.preset;
 
-import com.zack88604.autoupdater.infrastructure.json.JsonParser;
+import com.zack88604.autoupdater.infrastructure.json.StrictJson;
 
 import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
 import java.util.regex.Pattern;
 
@@ -27,29 +28,65 @@ public final class ServerGuiPresetOffer {
     private final String downloadPath;
     private final String sha256;
     private final long size;
+    private final GuiPlatform platform;
+    private final int minimumJavaVersion;
 
     private ServerGuiPresetOffer(String id, String version, String downloadPath,
-                                 String sha256, long size) {
+                                 String sha256, long size, GuiPlatform platform,
+                                 int minimumJavaVersion) {
         this.id = id;
         this.version = version;
         this.downloadPath = downloadPath;
         this.sha256 = sha256.toLowerCase(Locale.ROOT);
         this.size = size;
+        this.platform = platform;
+        this.minimumJavaVersion = minimumJavaVersion;
     }
 
     /** Parse and validate one server descriptor JSON document. */
     public static ServerGuiPresetOffer parse(String json) {
         Objects.requireNonNull(json, "json");
-        String id = required(JsonParser.getString(json, "id"), "id");
-        String version = required(JsonParser.getString(json, "version"), "version");
-        String path = required(JsonParser.getString(json, "path"), "path");
-        String hash = required(JsonParser.getString(json, "sha256"), "sha256");
-        long size = JsonParser.getLong(json, "size", -1);
+        Map<String, Object> values = StrictJson.parseObject(json);
+        return parseOffer(string(values, "id"), string(values, "version"), values, null, 8);
+    }
+
+    /** Validate every variant and select only the current JVM's exact platform. */
+    public static ServerGuiPresetOffer parseCatalog(String json, GuiPlatform current) {
+        Map<String, Object> root = StrictJson.parseObject(json);
+        String id = string(root, "id");
+        String version = string(root, "version");
+        Map<String, Object> variants = StrictJson.object(root.get("variants"));
+        if (variants.isEmpty() || variants.size() > 64) {
+            throw new IllegalArgumentException("Invalid GUI preset variant count");
+        }
+        ServerGuiPresetOffer selected = null;
+        for (Map.Entry<String, Object> entry : variants.entrySet()) {
+            Map<String, Object> values = StrictJson.object(entry.getValue());
+            GuiPlatform platform = GuiPlatform.declared(string(values, "os"), string(values, "arch"));
+            if (!entry.getKey().equals(platform.getId())) {
+                throw new IllegalArgumentException("GUI preset platform key does not match metadata");
+            }
+            long minimum = integer(values, "minimum_java_version");
+            if (minimum < 8 || minimum > 99) {
+                throw new IllegalArgumentException("Invalid GUI preset minimum Java version");
+            }
+            ServerGuiPresetOffer offer = parseOffer(id, version, values, platform, (int) minimum);
+            if (platform.equals(current) && GuiPlatform.currentJavaVersion() >= minimum) selected = offer;
+        }
+        return selected;
+    }
+
+    private static ServerGuiPresetOffer parseOffer(String id, String version,
+                                                    Map<String, Object> values,
+                                                    GuiPlatform platform, int minimum) {
+        String path = string(values, "path");
+        String hash = string(values, "sha256");
+        long size = integer(values, "size");
 
         if (!SAFE_ID.matcher(id).matches()) {
             throw new IllegalArgumentException("Invalid server GUI preset identifier");
         }
-        if (version.length() > 128 || containsControlCharacter(version)) {
+        if (version.length() > 128 || !version.equals(version.trim()) || containsControlCharacter(version)) {
             throw new IllegalArgumentException("Invalid server GUI preset version");
         }
         if (!isValidDownloadPath(path)) {
@@ -58,7 +95,7 @@ public final class ServerGuiPresetOffer {
         if (!SHA256.matcher(hash).matches() || size < 0) {
             throw new IllegalArgumentException("Invalid server GUI preset hash or size");
         }
-        return new ServerGuiPresetOffer(id, version, path, hash, size);
+        return new ServerGuiPresetOffer(id, version, path, hash, size, platform, minimum);
     }
 
     /** Return the stable server-side preset identifier. */
@@ -91,11 +128,23 @@ public final class ServerGuiPresetOffer {
         return "server-" + id + ".jar";
     }
 
-    private static String required(String value, String name) {
-        if (value == null || value.trim().isEmpty()) {
+    public GuiPlatform getPlatform() { return platform; }
+    public int getMinimumJavaVersion() { return minimumJavaVersion; }
+
+    private static String string(Map<String, Object> values, String name) {
+        Object value = values.get(name);
+        if (!(value instanceof String) || ((String) value).trim().isEmpty()) {
             throw new IllegalArgumentException("Missing server GUI preset " + name);
         }
-        return value.trim();
+        return (String) value;
+    }
+
+    private static long integer(Map<String, Object> values, String name) {
+        Object value = values.get(name);
+        if (!(value instanceof Long)) {
+            throw new IllegalArgumentException("Invalid server GUI preset " + name);
+        }
+        return (Long) value;
     }
 
     private static boolean isValidDownloadPath(String path) {
