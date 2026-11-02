@@ -336,16 +336,59 @@ jar cf my-gui.jar -C classes . -C meta META-INF
 
 #### Server-published presets
 
-A server-published preset uses exactly the same V1 or V2 JAR metadata described
-above. The update server distributes the descriptor and archive; it does not
-receive any additional GUI-control API. Configure the local server-preset policy
-as described in the README.
+For publication configuration, supported platforms and client policies, see
+[README: server-published GUI presets](README.md#server-published-gui-presets).
+`/api/v2/gui-preset` offers the V1 or V2 single archive selected by `file`;
+`/api/v3/gui-preset` offers V2 `java-helper` platform variants. The update server
+distributes descriptors and archives.
 
-The updater owns archives named `server-<id>.jar` inside
-`.mc-update/gui-presets/`. Do not use that reserved name for a manually
-installed preset. The user approves a `server URL + id` once; a later version
-from that identity can load directly. A changed server URL or id returns to the
-trusted Swing approval dialog.
+Example v3 response (hash and size are illustrative; the server computes actual values):
+
+```json
+{
+  "id": "example-javafx",
+  "version": "1.0.0",
+  "variants": {
+    "windows-x64": {
+      "os": "windows",
+      "arch": "x64",
+      "minimum_java_version": 17,
+      "path": "/api/v2/gui-presets/example-javafx-1.0.0-win.jar",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "size": 1234567
+    }
+  }
+}
+```
+
+| Field | Meaning and validation |
+|-------|------------------------|
+| `id` / `version` | Preset identity and release version shared by all variants |
+| `variants` | Non-empty mapping of platform identifiers to variant descriptors; partial platform releases are valid |
+| `os` / `arch` | Canonical OS and JVM architecture, matching the variant's platform key |
+| `minimum_java_version` | Integer minimum Java major version declared by the runtime manifest |
+| `path` | Direct-child archive download path under `/api/v2/gui-presets/` |
+| `sha256` / `size` | Whole preset JAR's SHA-256 (64 hexadecimal characters) and byte count |
+
+The client validates the complete nested descriptor, rejecting duplicate JSON
+keys, invalid fields and unsafe download paths. After selecting a compatible
+variant it downloads from the same server that supplied the descriptor, checks
+size and SHA-256, then verifies that the archive's platform, version and minimum
+Java version match the offer. Only then is the local preset cache atomically replaced.
+
+v3 returns 404 when no preset is published or only legacy `file` is configured,
+and 503 when a published descriptor is invalid or a referenced archive changes.
+Only a v3 404/405 permits trying v2 on the same server; an unmatched catalog,
+parsing failure or failed download does not. Other configured mirrors may still
+be tried. Successful descriptor responses carry `Cache-Control: no-store`. File
+downloads retain their v2 paths; see the README publication section for CDN settings.
+
+The updater reserves `.mc-update/gui-presets/server-<id>.jar` for server preset
+caches. Do not use that name for a manually installed preset. Approval is scoped
+to `server URL + id` and persists across version or platform changes; a changed
+URL or ID requires approval again. For archive platform fields see
+[7.1 Archive metadata](#71-archive-metadata); for runtime caching see
+[7.2 Runtime manifest](#72-runtime-manifest).
 
 #### Selection & fallback behavior
 
@@ -521,6 +564,8 @@ details remain in the log. The V2 protocol is unchanged.
 
 ## 6. Testing your adapter
 
+Use the following steps to inspect your custom adapter's actual window behavior.
+
 1. Start a server and generate a manifest (see the README Quick Start).
 2. Point a game directory at it and select your adapter.
 3. Set `mc-update.debug=true` to keep the window open on success for inspection.
@@ -554,18 +599,33 @@ version=1.0.0
 factory-class=com.example.updategui.HelperPresetFactory
 runtime-kind=java-helper
 runtime-manifest=META-INF/mc-update-runtime.properties
+
+# Include both fields for a platform-specific preset
+target-os=windows
+target-arch=x64
 ```
 
 The factory must implement `JavaHelperGuiPresetFactory`, have a public no-arg
 constructor, and keep JavaFX/other runtime classes out of its signature and
 static initialization.
 
+Declare `target-os` / `target-arch` together. Canonical values are
+`windows` / `linux` / `macos` and `x64` / `arm64`, respectively; the README's
+platform table lists the combinations accepted for server publication. v3
+variants must declare both fields and match the configured release `version`.
+
+Before loading preset code, local discovery reads metadata and the runtime
+manifest to filter incompatible platforms and Java versions. Legacy archives
+omitting both target fields retain single-archive compatibility; incomplete or
+invalid declarations are rejected. Platform identity comes from archive metadata,
+not filename inference.
+
 ### 7.2 Runtime manifest
 
 ```properties
 # META-INF/mc-update-runtime.properties
 helper-main-class=com.example.updategui.FxHelperMain
-minimum-java-version=11
+minimum-java-version=17
 
 # Archive resources to extract to .mc-update/gui-runtimes/<preset-hash>/
 module-path=runtime/javafx-base.jar,runtime/javafx-graphics.jar,runtime/javafx-controls.jar
@@ -579,6 +639,19 @@ sha256.runtime/javafx-controls.jar=<64 lowercase-or-uppercase hex characters>
 `classpath` or `module-path` requires a matching `sha256.<resource>` value.
 Runtime resources must be packaged inside the preset archive; the updater never
 downloads runtime code on a preset's behalf.
+
+`minimum-java-version` is the helper's minimum Java major version. v3 publication
+requires an explicit value, which the server copies into the variant descriptor;
+the client checks its JVM version and that the descriptor matches the archive.
+
+Runtime resources are extracted to `.mc-update/gui-runtimes/<preset-hash>/`,
+where `<preset-hash>` is the whole preset JAR's SHA-256. Existing files in that
+directory are reused after hash verification. A changed preset JAR creates a
+separate directory, so different preset versions can contain identical runtime
+dependencies. After successful preparation, the current directory and three
+most recently used older directories are retained. Other old directories with
+valid cache names are removed on a best-effort basis; locked files or other
+cleanup failures are logged without blocking startup.
 
 ### 7.3 Bootstrap and helper entry point
 

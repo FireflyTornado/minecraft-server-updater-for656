@@ -25,15 +25,25 @@ public final class GuiPreset {
     private final String factoryClassName;
     private final RuntimeKind runtimeKind;
     private final String runtimeManifestPath;
+    private final GuiPlatform targetPlatform;
+    private final int minimumJavaVersion;
 
     GuiPreset(File archive, String displayName, String version, String factoryClassName,
               RuntimeKind runtimeKind, String runtimeManifestPath) {
+        this(archive, displayName, version, factoryClassName, runtimeKind, runtimeManifestPath, null, 8);
+    }
+
+    GuiPreset(File archive, String displayName, String version, String factoryClassName,
+              RuntimeKind runtimeKind, String runtimeManifestPath, GuiPlatform targetPlatform,
+              int minimumJavaVersion) {
         this.archive = Objects.requireNonNull(archive, "archive");
         this.displayName = Objects.requireNonNull(displayName, "displayName");
         this.version = version;
         this.factoryClassName = Objects.requireNonNull(factoryClassName, "factoryClassName");
         this.runtimeKind = Objects.requireNonNull(runtimeKind, "runtimeKind");
         this.runtimeManifestPath = runtimeManifestPath;
+        this.targetPlatform = targetPlatform;
+        this.minimumJavaVersion = minimumJavaVersion;
     }
 
     /** Return the preset JAR selected by the user. */
@@ -72,6 +82,14 @@ public final class GuiPreset {
      */
     public String getRuntimeManifestPath() {
         return runtimeManifestPath;
+    }
+
+    public GuiPlatform getTargetPlatform() { return targetPlatform; }
+    public int getMinimumJavaVersion() { return minimumJavaVersion; }
+
+    public boolean isCompatible() {
+        return (targetPlatform == null || targetPlatform.equals(GuiPlatform.current()))
+                && GuiPlatform.currentJavaVersion() >= minimumJavaVersion;
     }
 
     /** Return the file name used to persist a selection. */

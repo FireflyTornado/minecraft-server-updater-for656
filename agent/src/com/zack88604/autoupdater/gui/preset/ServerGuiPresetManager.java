@@ -8,7 +8,6 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
-import java.util.Collections;
 import java.util.List;
 
 /**
@@ -21,7 +20,8 @@ import java.util.List;
  */
 public final class ServerGuiPresetManager {
 
-    private static final String DESCRIPTOR_PATH = "/api/v2/gui-preset";
+    private static final String DESCRIPTOR_PATH = "/api/v3/gui-preset";
+    private static final String LEGACY_DESCRIPTOR_PATH = "/api/v2/gui-preset";
 
     private final ServerGuiPresetTransport transport;
 
@@ -38,29 +38,45 @@ public final class ServerGuiPresetManager {
      * is unavailable, invalid, or cannot be installed.
      */
     public InstalledPreset install(List<String> serverUrls, GuiPresetStore store) {
+        return resolve(serverUrls, store).getInstalled();
+    }
+
+    public Resolution resolve(List<String> serverUrls, GuiPresetStore store) {
+        boolean offerPresent = false;
         if (serverUrls == null) {
-            return null;
+            return new Resolution(null, false);
         }
         for (String serverUrl : serverUrls) {
-            ServerGuiPresetTransport.Response response = transport.fetchDescriptor(
-                    Collections.singletonList(serverUrl), DESCRIPTOR_PATH);
-            if (response == null) {
-                continue;
+            ServerGuiPresetTransport.Response response = transport.fetchDescriptorAttempt(
+                    serverUrl, DESCRIPTOR_PATH);
+            if (response == null) continue;
+            boolean legacy = response.getStatusCode() == 404 || response.getStatusCode() == 405;
+            if (legacy) {
+                response = transport.fetchDescriptorAttempt(serverUrl, LEGACY_DESCRIPTOR_PATH);
             }
+            if (response == null || response.getStatusCode() != 200) continue;
+            offerPresent = true;
 
             ServerGuiPresetOffer offer;
             try {
-                offer = ServerGuiPresetOffer.parse(response.getBody());
+                offer = legacy ? ServerGuiPresetOffer.parse(response.getBody())
+                        : ServerGuiPresetOffer.parseCatalog(response.getBody(), GuiPlatform.current());
             } catch (IllegalArgumentException error) {
+                System.err.println("[GUI preset] Invalid descriptor: " + error.getMessage());
+                continue;
+            }
+            if (offer == null) {
+                System.err.println("[GUI preset] No compatible variant for " + GuiPlatform.current()
+                        + " / Java " + GuiPlatform.currentJavaVersion());
                 continue;
             }
 
             InstalledPreset installed = installFromResponse(response, offer, store);
             if (installed != null) {
-                return installed;
+                return new Resolution(installed, true);
             }
         }
-        return null;
+        return new Resolution(null, offerPresent);
     }
 
     private InstalledPreset installFromResponse(ServerGuiPresetTransport.Response response,
@@ -68,19 +84,19 @@ public final class ServerGuiPresetManager {
                                                 GuiPresetStore store) {
         File temporary = null;
         try {
-            File destination = store.getServerPresetArchive(offer.getId());
+            File destination = store.getServerPresetArchive(offer);
             if (!matchesExpectedArchive(destination, offer)) {
                 temporary = File.createTempFile("server-gui-", ".jar", destination.getParentFile());
                 if (!transport.download(response, offer.getDownloadPath(), temporary,
-                        offer.getSize()) || !matchesExpectedArchive(temporary, offer)) {
+                        offer.getSize()) || !matchesExpectedArchive(temporary, offer)
+                        || compatiblePreset(temporary, offer) == null) {
                     return null;
                 }
                 store.replaceServerPresetArchive(temporary, destination);
                 temporary = null;
             }
 
-            GuiPreset preset = findPreset(store.findLoadablePresets(),
-                    offer.getArchiveName());
+            GuiPreset preset = compatiblePreset(destination, offer);
             if (preset == null) {
                 return null;
             }
@@ -98,13 +114,30 @@ public final class ServerGuiPresetManager {
         }
     }
 
-    private static GuiPreset findPreset(List<GuiPreset> presets, String archiveName) {
-        for (GuiPreset preset : presets) {
-            if (archiveName.equals(preset.getArchiveName())) {
-                return preset;
-            }
+    private static GuiPreset compatiblePreset(File archive, ServerGuiPresetOffer offer) {
+        GuiPreset preset = GuiPresetStore.readMetadata(archive);
+        if (preset == null || !preset.isCompatible()) return null;
+        if (offer.getPlatform() != null
+                && (!offer.getPlatform().equals(preset.getTargetPlatform())
+                    || offer.getMinimumJavaVersion() != preset.getMinimumJavaVersion()
+                    || !offer.getVersion().equals(preset.getVersion()))) {
+            return null;
         }
-        return null;
+        return preset;
+    }
+
+    /** Distinguish an unusable published offer from an absent optional offer. */
+    public static final class Resolution {
+        private final InstalledPreset installed;
+        private final boolean offerPresent;
+
+        private Resolution(InstalledPreset installed, boolean offerPresent) {
+            this.installed = installed;
+            this.offerPresent = offerPresent;
+        }
+
+        public InstalledPreset getInstalled() { return installed; }
+        public boolean hasOffer() { return offerPresent; }
     }
 
     private static boolean matchesExpectedArchive(File archive, ServerGuiPresetOffer offer)

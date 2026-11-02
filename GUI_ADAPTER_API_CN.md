@@ -328,13 +328,51 @@ jar cf my-gui.jar -C classes . -C meta META-INF
 
 #### 服务端发布的预设
 
-服务端发布的预设使用与上文完全相同的 V1 或 V2 JAR 元数据。更新服务器只分发
-描述和归档，不会获得额外的 GUI 控制 API。服务端预设策略见 README。
+发布配置、平台支持表及客户端策略见 [README：服务端发布 GUI 预设](README_CN.md#服务端发布-gui-预设)。
+`/api/v2/gui-preset` 提供管理员通过 `file` 指定的 V1 或 V2 单包；
+`/api/v3/gui-preset` 提供 V2 `java-helper` 平台变体清单。更新服务器只分发描述与归档。
 
-更新器会在 `.mc-update/gui-presets/` 中管理名为 `server-<id>.jar` 的归档；
-手动安装的预设不要使用该保留名称。用户只需对某个 `服务器 URL + id` 批准一次；
-同一身份的新版本可以直接加载。服务器 URL 或 id 改变时会重新回到可信 Swing
-确认对话框。
+v3 响应示例（哈希与大小为示意值，实际值由服务端计算）：
+
+```json
+{
+  "id": "example-javafx",
+  "version": "1.0.0",
+  "variants": {
+    "windows-x64": {
+      "os": "windows",
+      "arch": "x64",
+      "minimum_java_version": 17,
+      "path": "/api/v2/gui-presets/example-javafx-1.0.0-win.jar",
+      "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+      "size": 1234567
+    }
+  }
+}
+```
+
+| 字段 | 含义与校验 |
+|------|------------|
+| `id` / `version` | 同一预设身份及发布版本，适用于全部变体 |
+| `variants` | 非空的平台标识到变体描述的映射，允许只发布部分平台 |
+| `os` / `arch` | 规范化系统和 JVM 架构，组合必须与该变体的平台标识一致 |
+| `minimum_java_version` | 包内运行时清单声明的最低 Java 主版本，整数 |
+| `path` | `/api/v2/gui-presets/` 下的直接子文件下载路径 |
+| `sha256` / `size` | 整个预设 JAR 的 SHA-256（64 位十六进制）及字节数 |
+
+客户端按对象层级解析并校验完整描述，拒绝重复 JSON 键、无效字段和不安全下载路径。
+选出兼容变体后，从提供描述的同一服务器下载，校验大小、SHA-256，再核对包内平台、
+版本和最低 Java 版本是否与描述一致；全部通过后才原子替换本地预设缓存。
+
+未发布预设或仅配置旧式 `file` 时，v3 返回 404；已发布描述无效或文件发生变化时返回 503。
+仅在 v3 返回 404/405 时尝试同一服务器的 v2，完整清单不匹配、解析失败及下载失败均不触发
+该降级。其他已配置源仍可继续尝试。两个接口成功返回描述时均带有 `Cache-Control: no-store`；
+文件下载继续使用 v2 路径，CDN 配置要求见 README 的发布章节。
+
+更新器统一保留 `.mc-update/gui-presets/server-<id>.jar` 作为服务端预设缓存名。
+手动安装的预设不要使用该保留名称。用户对 `服务器 URL + id` 批准一次后，同一身份的
+版本或平台更新继续使用原批准；更换 URL 或 ID 时重新确认。
+包内平台字段见 [7.1 预设元数据](#71-预设元数据)，运行时缓存见 [7.2 运行时清单](#72-运行时清单)。
 
 #### 选择与回退行为
 
@@ -502,6 +540,8 @@ DownloadProgress.active(String path, Kind kind, long downloadedBytes,
 
 ## 6. 测试你的 adapter
 
+以下步骤用于检查自定义 adapter 的实际窗口行为。
+
 1. 启动服务器并生成清单（见 README 快速开始）。
 2. 指定一个游戏目录并选中你的 adapter。
 3. 设置 `mc-update.debug=true`，成功后窗口保持打开便于检查。
@@ -533,17 +573,29 @@ version=1.0.0
 factory-class=com.example.updategui.HelperPresetFactory
 runtime-kind=java-helper
 runtime-manifest=META-INF/mc-update-runtime.properties
+
+# 平台相关预设填写以下两个字段
+target-os=windows
+target-arch=x64
 ```
 
 factory 必须实现 `JavaHelperGuiPresetFactory`、拥有 public 无参构造器，并且不能在
 方法签名或 static 初始化中引用 JavaFX 或其他运行时类。
+
+`target-os` / `target-arch` 必须成对提供，规范值分别为 `windows` / `linux` / `macos`
+和 `x64` / `arm64`。服务端可发布的平台组合见 README 的平台表。v3 平台变体必须声明
+这两个字段，且包内 `version` 必须等于发布配置的版本号。
+
+本地选择器在加载代码前读取元数据及运行时清单，过滤平台不匹配或 Java 版本不足的包。
+省略两个目标字段的旧预设保留单包兼容行为；只有一个字段或值无效的包不可选。平台信息
+取自包内元数据，不根据文件名推断。
 
 ### 7.2 运行时清单
 
 ```properties
 # META-INF/mc-update-runtime.properties
 helper-main-class=com.example.updategui.FxHelperMain
-minimum-java-version=11
+minimum-java-version=17
 
 # 解压到 .mc-update/gui-runtimes/<preset-hash>/ 的 JAR 内资源
 module-path=runtime/javafx-base.jar,runtime/javafx-graphics.jar,runtime/javafx-controls.jar
@@ -556,6 +608,15 @@ sha256.runtime/javafx-controls.jar=<64 位大小写均可的十六进制字符>
 普通依赖 JAR 可写在 `classpath` 中。`classpath` 或 `module-path` 中的每个资源都
 必须具有对应的 `sha256.<resource>`。运行时资源必须随 preset JAR 一起打包；更新器
 不会替预设下载任何运行时代码。
+
+`minimum-java-version` 表示 helper 所需的最低 Java 主版本。v3 发布时必须明确声明，
+服务端将它写入变体描述；客户端检查当前 JVM 版本并核对该值与包内清单一致。
+
+运行时解压到 `.mc-update/gui-runtimes/<preset-hash>/`，其中 `<preset-hash>` 是整个预设
+JAR 的 SHA-256。目录内已有文件通过哈希校验即可复用；预设 JAR 变化会建立独立目录，
+因此不同预设版本可能保存内容相同的运行时依赖。
+准备成功后保留当前目录及最近使用的三个旧目录，其他符合缓存命名规则的旧目录尝试清理。
+文件被占用等导致删除失败时记录日志，不阻止启动。
 
 ### 7.3 Bootstrap 与 helper 入口
 

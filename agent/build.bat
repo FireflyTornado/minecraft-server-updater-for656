@@ -16,7 +16,7 @@ echo [build] Compiling...
 if exist "%BUILD_DIR%" rmdir /s /q "%BUILD_DIR%"
 mkdir "%BUILD_DIR%"
 dir /s /b "%SRC_DIR%\*.java" > "%BUILD_DIR%\sources.txt"
-javac -d "%BUILD_DIR%" @"%BUILD_DIR%\sources.txt"
+javac --release 17 -encoding UTF-8 -d "%BUILD_DIR%" @"%BUILD_DIR%\sources.txt"
 if %ERRORLEVEL% neq 0 (
     echo [build] Compilation failed!
     exit /b 1

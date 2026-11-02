@@ -36,7 +36,6 @@ public final class ServerGuiPresetTrust {
     /** Return whether this trust decision applies to the supplied server offer. */
     public boolean matches(ServerGuiPresetOffer offer, String offeredServerUrl) {
         return serverUrl.equals(offeredServerUrl)
-                && presetId.equals(offer.getId())
-                && archiveName.equals(offer.getArchiveName());
+                && presetId.equals(offer.getId());
     }
 }

@@ -10,8 +10,8 @@
 
 | 文件 | 面向对象 | 作用 |
 |------|----------|------|
-| `README.md` / `README_CN.md` | 运维人员与维护者 | 构建、部署、配置与仓库导航。 |
-| `GUI_ADAPTER_API.md` / `GUI_ADAPTER_API_CN.md` | GUI 开发者 | 对外 GUI 契约、V1 预设与 V2 隔离 Java helper 预设。 |
+| `README.md` / `README_CN.md` | 运维人员与维护者 | 构建、部署、配置与多平台预设发布。 |
+| `GUI_ADAPTER_API.md` / `GUI_ADAPTER_API_CN.md` | GUI 开发者 | 对外 GUI 契约、预设协议与元数据、V1/V2 adapter 开发。 |
 
 ## 简介
 
@@ -92,7 +92,7 @@ docker exec mc-update python3 /app/generate_manifest.py \
 ### Agent
 
 ```bash
-# Linux/macOS（需要带 javac 的 JDK）
+# Linux/macOS（需要 JDK 17 或更高版本）
 bash agent/build.sh
 bash agent/setup-agent.sh ~/.minecraft/versions/1.20.1 http://your-server:25565 BASE64_X509_ED25519_PUBLIC_KEY
 
@@ -125,7 +125,7 @@ manifest-public-key=BASE64_X509_ED25519_PUBLIC_KEY
 # 可选：manifest-key-id=ed25519-0123456789abcdef
 ```
 
-未配置公钥时，客户端会一次性显示服务器地址、key ID 与 SHA-256 指纹供用户确认；同意后会固定该密钥，之后绝不自动替换。客户端从 `/api/v3/manifest` 获取清单，在改动任何文件前验证 Ed25519 签名、有效期和内嵌清单哈希。Ed25519 需要 Java 15 或更高版本。`/api/v3/manifest-public-key` 仅用于管理员检查，客户端绝不自动信任它。`/api/v2/manifest` 保留给旧客户端。
+未配置公钥时，客户端会一次性显示服务器地址、key ID 与 SHA-256 指纹供用户确认；同意后会固定该密钥，之后绝不自动替换。客户端从 `/api/v3/manifest` 获取清单，在改动任何文件前验证 Ed25519 签名、有效期和内嵌清单哈希。当前核心以 Java 17 为目标构建，运行及构建均要求 Java 17 或更高版本。`/api/v3/manifest-public-key` 仅用于管理员检查，客户端绝不自动信任它。`/api/v2/manifest` 保留给旧客户端。
 
 ## 安全跳过更新
 
@@ -174,7 +174,8 @@ manifest-public-key=BASE64_X509_ED25519_PUBLIC_KEY
 | `/api/v3/manifest-public-key` | GET | 供管理员固定公钥的公开密钥描述 |
 | `/api/files/<path>` | GET | 下载指定资源文件 |
 | `/api/agent` | GET | 下载最新 `UpdateAgent_core.jar` |
-| `/api/v2/gui-preset` | GET | 可选的服务端 GUI 预设描述 |
+| `/api/v2/gui-preset` | GET | 兼容旧客户端的可选单包 GUI 预设描述 |
+| `/api/v3/gui-preset` | GET | GUI 预设多平台清单，由客户端按 JVM 环境选择变体 |
 | `/api/v2/gui-presets/<archive>.jar` | GET | 描述文件指定的预设 JAR |
 | `/api/config` | GET | 管理路径与排除路径配置 |
 | `/api/generate` | POST | 生成已配置的服务端目标（Token 保护） |
@@ -256,15 +257,25 @@ progress-reset-threshold-percent=1
 
 ### 服务端发布 GUI 预设
 
-服务器可以在普通游戏文件清单之外发布一个可选 GUI 预设。配置的更新服务器就是
-信任边界：客户端会校验描述文件结构、下载 JAR 的 SHA-256 与大小，并在首次加载每个
-`服务器 URL + 预设 id` 身份前向用户确认。该能力默认禁用。
+服务器可以在普通游戏文件清单之外发布一个可选 GUI 预设，并为它提供不同的平台包。
+客户端根据启动 Minecraft 所用 JVM 的操作系统、架构和 Java 版本选择兼容包。
+核心需要 Java 17+，并且必须达到所选预设的最低 Java 版本要求。
 
-服务端管理员手动把 JAR 放到挂载的数据卷中，例如：
+#### 平台与发布配置
 
-    /srv/mc-update/gui-presets/example-javafx-1.2.0.jar
+| 平台标识 | JVM 环境 | 示例文件名后缀 |
+|----------|----------|----------------|
+| `windows-x64` | Windows x64 | `win.jar` |
+| `linux-x64` | Linux x64 | `linux.jar` |
+| `macos-x64` | macOS x64 | `mac.jar` |
+| `macos-arm64` | macOS ARM64 | `mac-aarch64.jar` |
 
-然后在 `/srv/mc-update/update-config.json` 中配置发布目标：
+`amd64` / `x86_64` / `x64` 归一化为 x64，`aarch64` / `arm64` 归一化为 ARM64。
+Apple Silicon 上使用 x64 Java 时选择 macOS x64 包。没有兼容变体、未知系统或 32 位
+JVM 均使用内建 Swing，普通资源更新流程继续执行。
+
+将准备发布的 JAR 手动上传到 `/srv/mc-update/gui-presets/`，然后在现有
+`/srv/mc-update/update-config.json` 中合并 `generation` 配置，保留其他同步及维护设置：
 
 ```json
 {
@@ -274,35 +285,87 @@ progress-reset-threshold-percent=1
     "targets": ["manifest", "gui-preset"],
     "gui_preset": {
       "id": "example-javafx",
-      "version": "1.2.0",
-      "file": "example-javafx-1.2.0.jar"
+      "version": "1.0.0",
+      "file": "example-javafx-1.0.0-win.jar",
+      "variants": {
+        "windows-x64": "example-javafx-1.0.0-win.jar",
+        "linux-x64": "example-javafx-1.0.0-linux.jar",
+        "macos-x64": "example-javafx-1.0.0-mac.jar",
+        "macos-arm64": "example-javafx-1.0.0-mac-aarch64.jar"
+      }
     }
   }
 }
 ```
 
-如果服务端配置了 `GENERATE_TOKEN`，触发发布时传入它；不需要进入容器执行签名，也不会通过
-HTTP 上传代码：
+- `variants` 是平台标识到文件名的映射，允许只配置 `windows-x64`；此时只需上传 Windows 包。
+  所有已声明的文件都必须存在，映射不允许为空或 `null`。
+- `file` 是可选的旧客户端单包入口。不需要旧客户端兼容时可以省略；只配置 `file` 则维持
+  单包发布行为。v3 清单缺少当前平台时，客户端不会从同一服务器的 v2 入口下载其他平台包。
+- 每个变体必须包含与配置相符的平台元数据和版本号，最低 Java 版本从包内运行时清单读取。
+  字段定义见 [GUI API：预设元数据](GUI_ADAPTER_API_CN.md#71-预设元数据)。
+- 这里使用通用示例文件名。使用 [FireflyTornado JavaFX UI Preset](https://github.com/FireflyTornado/UI-preset-for-Zack88604-Minecraft-server-updater)
+  等具体预设时，按其 README 构建，并填写实际文件名及版本号。
 
-    curl -X POST https://update.example.com/api/generate \
-      -H "X-Generate-Token: $GENERATE_TOKEN"
+#### 生成与验证
 
-`/api/generate` 只读取这份服务端配置。它会校验手动安装的 JAR，计算哈希与大小，并且
-仅在校验成功后原子替换 `/srv/mc-update/gui-preset.json`。没有 `generation` 节点时，
-会保持兼容，默认只生成 `["manifest"]`。面向客户端的 `/api/config` 只返回
-`managed_paths` 和 `excluded_paths`，不会暴露 `generation`。
+配置了 `GENERATE_TOKEN` 时，发布请求携带现有 Token：
 
-在客户端启用可选策略：
+```bash
+curl -fsS -X POST https://update.example.com/api/generate \
+  -H "X-Generate-Token: $GENERATE_TOKEN"
+```
 
-    server-gui=recommended
+`/api/generate` 只读取服务端配置，不上传代码。所有已声明文件验证成功后，服务端计算
+SHA-256 和大小，并原子替换 `/srv/mc-update/gui-preset.json`；任意声明无效或文件缺失时，
+预设发布失败，上一份预设清单保持不变。没有 `generation` 节点时，默认只生成 `["manifest"]`。
+`/api/config` 只返回 `managed_paths` 和 `excluded_paths`，不会暴露 `generation`。
 
-`recommended` 只会在没有优先级更高的本地已记住选择时使用服务器预设，并会刷新已选中的
-服务器预设。`required` 会覆盖本地已记住选择，但仍需要用户首次批准同一服务器和预设
-身份。`disabled` 为默认值；显式配置的 `gui-adapter` 始终优先。
+发布后检查多平台清单；配置了 `file` 时，也可检查旧单包入口：
 
-首次使用某个服务器 URL + 预设 id 时，内建 Swing 会显示外部代码风险提示。之后同一
-身份的新版本不会重复提示；更换服务器 URL 或预设 id 会重新确认。生产环境应使用 HTTPS。
-配置后，生成 Token 只保护发布操作，不保护客户端下载，且绝不能写入客户端配置。升级后，旧的基于签名密钥的批准记录会要求重新确认一次。
+```bash
+curl -fsS https://update.example.com/api/v3/gui-preset
+curl -fsS https://update.example.com/api/v2/gui-preset
+```
+
+清单描述格式见 [GUI API：服务端发布的预设](GUI_ADAPTER_API_CN.md#服务端发布的预设)。
+
+#### 客户端策略与兼容性
+
+在游戏目录的 `mc-update.properties` 中启用：
+
+```properties
+server-gui=recommended
+```
+
+`disabled`（默认）不查询服务端预设；`recommended` 尊重已记住的本地选择，并刷新已选中的
+服务器预设；`required` 优先使用服务器预设。显式配置的 `gui-adapter` 始终优先。
+首次加载每个 `服务器 URL + 预设 id` 身份都需要用户批准，版本或平台变化不改变该身份。
+没有兼容包、下载校验失败或 helper 启动失败时回退 Swing，自动回退不保存为用户的默认偏好。
+
+| 客户端 / 服务端能力 | 行为 |
+|--------------------|------|
+| 支持 v3 的客户端 / 多平台发布 | 精确选择兼容变体；没有匹配项则 Swing |
+| 支持 v3 的客户端 / 旧服务端或仅配置 `file` | v3 返回 404/405 时尝试 v2 |
+| 仅支持 v2 的客户端 / 提供 `file` 的服务端 | 使用指定单包，不进行平台选择 |
+| v3 无效、返回 503 或下载失败 | 不向同一服务器的 v2 降级，可尝试其他配置源 |
+
+客户端统一使用 `.mc-update/gui-presets/server-<id>.jar`，版本或 JVM 平台变化时在同一路径
+校验并原子替换预设。运行时缓存规则见 [GUI API：运行时清单](GUI_ADAPTER_API_CN.md#72-运行时清单)。
+
+#### 版本发布与 CDN
+
+预设内容变化时使用新的版本号和文件名，并保持原 `id`。先上传所需平台包，再更新配置并
+生成清单。首次启用多平台功能时，先准备预设包，再部署支持新旧接口的服务端，最后下发
+支持 v3 的核心；已有客户端的核心自更新在下一次启动时生效。
+
+CDN 预热使用清单中 `path` 指向的 `/api/v2/gui-presets/<archive>.jar` 文件地址。
+`/api/v3/gui-preset` 和 `/api/v2/gui-preset` 是动态描述接口，应禁止 CDN 缓存。
+同名覆盖已缓存文件时需先刷新该文件缓存，再预热并核对 CDN 实际返回的大小和哈希；
+否则核心会拒绝不一致的包并回退 Swing。
+
+生产环境应使用 HTTPS。`GENERATE_TOKEN` 只保护发布操作，不保护客户端下载，不应写入
+客户端配置。平台包的具体窗口行为仍需在对应系统及 JVM 上实测。
 
 ### 选择性同步 (`update-config.json`)
 
@@ -336,6 +399,7 @@ HTTP 上传代码：
 │   ├── app.py                            # Flask API
 │   ├── entrypoint.sh                     # 容器入口
 │   ├── generate_manifest.py              # 清单生成器
+│   ├── gui_presets.py                    # 单包与多平台 GUI 预设发布校验
 │   └── requirements.txt
 └── agent/
     ├── META-INF/MANIFEST.MF              # java-agent 启动器清单

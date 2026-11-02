@@ -15,7 +15,7 @@ CORE_JAR="$SCRIPT_DIR/UpdateAgent_core.jar"
 echo "[build] Compiling..."
 rm -rf "$BUILD_DIR"
 mkdir -p "$BUILD_DIR"
-find "$SRC_DIR" -type f -name '*.java' -print0 | xargs -0 javac -d "$BUILD_DIR"
+find "$SRC_DIR" -type f -name '*.java' -print0 | xargs -0 javac --release 17 -encoding UTF-8 -d "$BUILD_DIR"
 
 echo "[build] Packaging launcher JAR..."
 cd "$BUILD_DIR"
