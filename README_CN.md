@@ -103,6 +103,8 @@ agent\setup-agent.bat C:\path\to\instance http://your-server:25565 BASE64_X509_E
 
 安装脚本会将服务器配置写入游戏目录下的 `mc-update.properties`，并向启动器 JVM 参数追加 `-javaagent:<path>/UpdateAgent.jar`。
 
+核心在执行更新逻辑前校验调用它的外壳 JAR 的完整 SHA-256，只接受同批构建的外壳或旧整合包随附的原版外壳。整合包之外的安装请配套使用同批构建的两个 JAR。外壳校验失败时，JVM 会在 Minecraft 启动前终止。
+
 更新器拥有的运行时文件：
 
 ```text

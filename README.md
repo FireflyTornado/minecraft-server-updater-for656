@@ -103,6 +103,8 @@ agent\setup-agent.bat C:\path\to\instance http://your-server:25565 BASE64_X509_E
 
 The setup script writes server configuration to `mc-update.properties` in the game directory and appends `-javaagent:<path>/UpdateAgent.jar` to the launcher's JVM arguments.
 
+Before starting the updater, the core checks the full SHA-256 of the launcher JAR that called it. It accepts the launcher built with that core or the original launcher shipped in the server pack. Use the two JARs from the same build for other installations. A failed integrity check stops the JVM before Minecraft starts.
+
 Runtime files owned by the updater:
 
 ```text

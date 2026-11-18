@@ -8,6 +8,7 @@
  */
 
 import com.zack88604.autoupdater.bootstrap.AgentBootstrap;
+import java.io.IOException;
 import java.lang.instrument.Instrumentation;
 
 public final class UpdateAgent {
@@ -18,6 +19,17 @@ public final class UpdateAgent {
 
     /** Delegate the Java agent entry point to the packaged implementation. */
     public static void premain(String args, Instrumentation inst) {
+        try {
+            // Reflection frames are skipped. The caller is the Launcher that invoked us.
+            Class<?> launcher = StackWalker.getInstance(StackWalker.Option.RETAIN_CLASS_REFERENCE)
+                    .getCallerClass();
+            LauncherIntegrity.verify(launcher);
+        } catch (IOException | RuntimeException error) {
+            System.err.println("[UpdateAgent] Launcher integrity check failed: " + error.getMessage());
+            // Returning or throwing here would let an enclosing agent continue startup.
+            Runtime.getRuntime().halt(1);
+            return;
+        }
         AgentBootstrap.premain(args, inst);
     }
 }
