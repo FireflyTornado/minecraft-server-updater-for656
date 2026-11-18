@@ -24,7 +24,7 @@
 
 | JAR | Role |
 |-----|------|
-| `UpdateAgent.jar` (Launcher) | Thin wrapper loaded by `-javaagent`. Replaces the core JAR at startup if a `.jar.new` exists, then delegates to it. **Never updated**, which avoids file-lock issues on Windows. |
+| `UpdateAgent.jar` (Launcher) | Loaded by `-javaagent`. Authenticates the core release before installing or loading it. Distributed by the administrator. |
 | `UpdateAgent_core.jar` (Core) | The actual update logic: HTTP sync, GUI, file cleanup. **Can be self-updated** — a new version is downloaded as `.jar.new` and swapped in on the next launch. |
 
 ### Startup flow
@@ -102,6 +102,8 @@ agent\setup-agent.bat C:\path\to\instance http://your-server:25565 BASE64_X509_E
 ```
 
 The setup script writes server configuration to `mc-update.properties` in the game directory and appends `-javaagent:<path>/UpdateAgent.jar` to the launcher's JVM arguments.
+
+Build with `MC_UPDATE_RELEASE_PUBLIC_KEY_FILE` pointing to the Base64 X.509 DER Ed25519 release key, then sign both JARs with `agent/sign-release.py`. Install both JARs with the generated `.mc-update/releases/` directory beside them. Automatic core updates also store their proofs in that directory. The core checks the whole launcher JAR before starting the update flow. See the [signed release and migration instructions](README_CN.md#签名并发布更新器) for signing and publishing subsequent core releases.
 
 Runtime files owned by the updater:
 

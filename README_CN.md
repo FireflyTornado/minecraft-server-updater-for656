@@ -24,8 +24,8 @@
 
 | JAR | 职责 |
 |-----|------|
-| `UpdateAgent.jar`（启动器） | 由 `-javaagent` 加载的薄封装层。启动时若存在 `.jar.new` 则替换核心 JAR，然后委托给核心逻辑。**永不更新**，避免了 Windows 平台的文件锁问题。 |
-| `UpdateAgent_core.jar`（核心） | 实际的更新逻辑：HTTP 同步、GUI、文件清理。**可自更新** — 新版本下载为 `.jar.new`，下次启动时替换。 |
+| `UpdateAgent.jar`（启动器） | 由 `-javaagent` 加载，验证核心的发布签名后才替换或加载。由管理员随发布包分发。 |
+| `UpdateAgent_core.jar`（核心） | 进入更新流程前验证整个启动器 JAR。通过发布签名和下载校验的新核心暂存为 `.jar.new`，下次启动重新验证后生效。 |
 
 ### 启动流程
 
@@ -36,8 +36,9 @@ sequenceDiagram
     participant A as 核心 Agent
     participant S as 更新服务器
     MC->>L: -javaagent premain
-    L->>L: 存在 .new 则替换核心 JAR
+    L->>L: 验证核心，存在已认证的 .new 则替换
     L->>A: 加载 UpdateAgent_core.jar 并委托
+    A->>A: 验证启动器 JAR
     A->>A: 解析配置、选择 GUI adapter
     A->>S: GET /api/v3/manifest（已签名）
     A->>A: agent 自更新检查
@@ -102,6 +103,25 @@ agent\setup-agent.bat C:\path\to\instance http://your-server:25565 BASE64_X509_E
 ```
 
 安装脚本会将服务器配置写入游戏目录下的 `mc-update.properties`，并向启动器 JVM 参数追加 `-javaagent:<path>/UpdateAgent.jar`。
+
+### 签名并发布更新器
+
+更新器发布密钥独立于服务端的资源清单密钥。发布者生成一次 Ed25519 密钥对，将私钥保存在发布环境。构建时用 `MC_UPDATE_RELEASE_PUBLIC_KEY_FILE` 指向单行 Base64 编码的 X.509 DER 公钥文件。两个构建脚本都会将该公钥嵌入 JAR。未嵌入公钥的构建只能用于编译验证，无法启动游戏。
+
+```bash
+# 在发布环境中生成一次密钥，以后核心更新继续使用同一发布密钥
+openssl genpkey -algorithm ED25519 -out /secure/updater-release.pem
+openssl pkey -in /secure/updater-release.pem -pubout -outform DER | openssl base64 -A > release-public.txt
+MC_UPDATE_RELEASE_PUBLIC_KEY_FILE="$PWD/release-public.txt" bash agent/build.sh
+python agent/sign-release.py --key /secure/updater-release.pem --version 1.0.0
+```
+
+Windows 下可在运行 `agent\build.bat` 前设置相同的环境变量。签名工具使用 Python `cryptography` 库，并检查两个 JAR 内嵌的公钥是否与签名私钥配对。签名覆盖产物角色、版本、字节数和完整 SHA-256。
+
+- **迁移客户端。** 关闭游戏后，通过可信渠道分发两个新版 JAR，并在它们旁边保留签名工具生成的 `.mc-update/releases/` 目录及其中的两个签名文件。即使 JAR 放在独立的工具目录，签名目录也跟随 JAR。移除旧版遗留的未签名 `UpdateAgent_core.jar.new`。
+- **客户端自更新。** 核心下载成功后，更新器将签名写入 `.mc-update/releases/`，下次启动从该目录重新验证。
+- **发布后续核心。** 将新核心与 `.mc-update/releases/` 中对应的核心签名文件直接放入服务端的 `/data/agent/`，再重新生成资源清单。缺少发布签名的服务器仍可提供资源更新，新客户端会跳过该核心更新。
+- **校验失败。** 外壳、已安装核心或待安装核心未通过启动校验时，游戏启动会终止。用可信发布包恢复。核心对外壳的检查发生在外壳入口运行之后，只能阻止游戏继续启动。已签名的旧包仍可用于恢复。
 
 更新器拥有的运行时文件：
 
