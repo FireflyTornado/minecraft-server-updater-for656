@@ -423,7 +423,8 @@ public final class UpdateService {
             transaction.capture(pending.toFile());
             // Publish the proof first. An orphaned proof cannot activate a JAR,
             // and both previous and newly staged JARs keep their own proofs.
-            Path temporaryProof = Files.createTempFile(directory, ".mc-update-proof-", ".tmp");
+            Path proofDirectory = Files.createDirectories(proof.getParent());
+            Path temporaryProof = Files.createTempFile(proofDirectory, ".mc-update-proof-", ".tmp");
             try {
                 Files.writeString(temporaryProof, agent.getReleaseProof(), StandardCharsets.US_ASCII);
                 Files.move(temporaryProof, proof, StandardCopyOption.ATOMIC_MOVE,

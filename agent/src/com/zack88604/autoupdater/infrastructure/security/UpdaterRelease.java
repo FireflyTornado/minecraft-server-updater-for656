@@ -59,7 +59,8 @@ public final class UpdaterRelease {
         if (!hash.matches("[0-9a-f]{64}")) {
             throw new IOException("Invalid updater SHA-256");
         }
-        return directory.resolve(".mc-update-release-" + hash + ".sig");
+        return directory.resolve(".mc-update").resolve("releases")
+                .resolve(".mc-update-release-" + hash + ".sig");
     }
 
     public static void verify(Path jar, String role, PublicKey key) throws IOException {

@@ -24,7 +24,8 @@ def sign_artifact(jar, role, version, private_key, public_der):
     digest = hashlib.sha256(contents).hexdigest()
     payload = f'mc-update-release-v1\n{role}\n{version}\n{len(contents)}\n{digest}\n'
     signature = base64.b64encode(private_key.sign(payload.encode('ascii'))).decode('ascii')
-    return jar.with_name(f'.mc-update-release-{digest}.sig'), f'{version}:{signature}\n'
+    directory = jar.parent / '.mc-update' / 'releases'
+    return directory / f'.mc-update-release-{digest}.sig', f'{version}:{signature}\n'
 
 
 def main():
@@ -47,8 +48,9 @@ def main():
         proofs = [sign_artifact(args.directory / name, role, args.version, key, public_der)
                   for name, role in artifacts]
         for output, proof in proofs:
+            output.parent.mkdir(parents=True, exist_ok=True)
             output.write_text(proof, encoding='ascii', newline='\n')
-            print(output.name)
+            print(output.relative_to(args.directory))
     except (OSError, ValueError, TypeError, KeyError, zipfile.BadZipFile) as error:
         parser.error(str(error))
 
