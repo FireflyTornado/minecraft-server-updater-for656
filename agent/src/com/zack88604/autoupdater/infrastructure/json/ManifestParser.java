@@ -48,7 +48,8 @@ public final class ManifestParser {
         if (hash == null || size < 0) {
             return null;
         }
-        return new AgentArtifact(AGENT_DOWNLOAD_PATH, hash, size);
+        return new AgentArtifact(AGENT_DOWNLOAD_PATH, hash, size,
+                JsonParser.getString(agentObject, "release_proof"));
     }
 
     private static List<FileEntry> parseFileEntries(String filesArray) {

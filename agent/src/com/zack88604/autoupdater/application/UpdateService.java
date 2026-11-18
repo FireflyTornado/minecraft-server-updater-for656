@@ -13,11 +13,15 @@ import com.zack88604.autoupdater.infrastructure.http.ServerClient;
 import com.zack88604.autoupdater.infrastructure.json.ManifestParser;
 import com.zack88604.autoupdater.infrastructure.security.ManifestSignatureVerifier;
 import com.zack88604.autoupdater.infrastructure.security.ManifestKeyTrustBootstrap;
+import com.zack88604.autoupdater.infrastructure.security.UpdaterRelease;
 
 import java.io.File;
 import java.io.IOException;
-import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.LinkOption;
+import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
@@ -389,27 +393,47 @@ public final class UpdateService {
             relay.log("  [OK]    Agent is up to date");
             return;
         }
+        if (agent.getReleaseProof() == null) {
+            relay.log("  [SKIP]  The server does not advertise a release-signed core");
+            return;
+        }
+        UpdaterRelease.verifyProof(agent.getReleaseProof(), UpdaterRelease.CORE, agent.getSize(),
+                agent.getSha256(), UpdaterRelease.pinnedKey(UpdateService.class));
 
         relay.log("  [UPDATE] New agent version available!");
         relay.log("  Remote: " + agent.getSha256());
         relay.log("  Local:  " + localHash);
         relay.status(UpdatePhase.PREPARING, "Downloading agent update...", null, false);
 
-        File newJar = new File(jarPath + ".new");
+        Path directory = currentJar.toPath().getParent();
+        Path pending = directory.resolve(currentJar.getName() + ".new");
+        Path proof = UpdaterRelease.proofPath(directory, agent.getSha256());
         relay.checkpoint();
-        transaction.capture(newJar);
-        if (newJar.exists() && !newJar.delete()) {
-            relay.log("  [FAIL]  Cannot replace pending agent update");
-            return;
-        }
 
         relay.startDownload(currentJar.getName(), UpdateEvent.DownloadKind.UPDATER, agent.getSize());
-        boolean keepDownloadedAgent = false;
+        Path downloaded = Files.createTempFile(directory, ".mc-update-core-", ".tmp");
         try {
-            serverClient.downloadWithFallback(agent.getPath(), newJar, agent.getSize(), agent.getSha256());
+            serverClient.downloadWithFallback(agent.getPath(), downloaded.toFile(),
+                    agent.getSize(), agent.getSha256());
             relay.checkpoint();
-
-            keepDownloadedAgent = true;
+            if (!Files.notExists(pending, LinkOption.NOFOLLOW_LINKS)
+                    && !Files.isRegularFile(pending, LinkOption.NOFOLLOW_LINKS)) {
+                throw new IOException("Invalid pending core path");
+            }
+            transaction.capture(pending.toFile());
+            // Publish the proof first. An orphaned proof cannot activate a JAR,
+            // and both previous and newly staged JARs keep their own proofs.
+            Path temporaryProof = Files.createTempFile(directory, ".mc-update-proof-", ".tmp");
+            try {
+                Files.writeString(temporaryProof, agent.getReleaseProof(), StandardCharsets.US_ASCII);
+                Files.move(temporaryProof, proof, StandardCopyOption.ATOMIC_MOVE,
+                        StandardCopyOption.REPLACE_EXISTING);
+            } finally {
+                Files.deleteIfExists(temporaryProof);
+            }
+            Files.move(downloaded, pending, StandardCopyOption.ATOMIC_MOVE,
+                    StandardCopyOption.REPLACE_EXISTING);
+            relay.finishDownload();
             relay.log("  [OK]    Agent downloaded, will replace on next restart");
         } catch (ServerClient.DownloadFailedException failure) {
             String message = "File download failed: " + currentJar.getName() + " (reason: "
@@ -417,13 +441,7 @@ public final class UpdateService {
             relay.log("  [FAIL]  " + message + ": " + failure.getMessage());
             throw new IOException(message, failure);
         } finally {
-            try {
-                if (keepDownloadedAgent) relay.finishDownload();
-            } finally {
-                if (!keepDownloadedAgent) {
-                    newJar.delete();
-                }
-            }
+            Files.deleteIfExists(downloaded);
         }
     }
 
@@ -445,9 +463,7 @@ public final class UpdateService {
 
     private static String getMyJarPath() {
         try {
-            String path = UpdateService.class.getProtectionDomain()
-                    .getCodeSource().getLocation().getPath();
-            return URLDecoder.decode(path, StandardCharsets.UTF_8);
+            return UpdaterRelease.codeSource(UpdateService.class).toString();
         } catch (Exception e) {
             return null;
         }

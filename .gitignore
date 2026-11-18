@@ -2,6 +2,7 @@
 /agent/build/
 /agent/UpdateAgent.jar
 /agent/UpdateAgent_core.jar
+/agent/.mc-update-release-*.sig
 *.class
 
 # Local tests, probes, and demonstration artifacts

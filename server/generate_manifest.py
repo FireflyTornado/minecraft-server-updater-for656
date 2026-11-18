@@ -15,6 +15,7 @@ import os
 import json
 import hashlib
 import argparse
+import re
 
 
 def compute_sha256(filepath):
@@ -217,6 +218,16 @@ def main():
             'hash': agent_hash,
             'size': agent_size,
         }
+        proof_path = os.path.join(os.path.dirname(args.agent_jar),
+                                  f'.mc-update-release-{agent_hash}.sig')
+        if os.path.isfile(proof_path):
+            with open(proof_path, 'rb') as source:
+                proof_bytes = source.read(257)
+            if len(proof_bytes) > 256 or not re.fullmatch(
+                    rb'[A-Za-z0-9][A-Za-z0-9._+-]{0,63}:[A-Za-z0-9+/]{86}==',
+                    proof_bytes.strip()):
+                parser.error('Invalid updater release proof: ' + proof_path)
+            manifest['agent']['release_proof'] = proof_bytes.strip().decode('ascii')
         print(f"[update-service] Agent info added (hash={agent_hash}, size={agent_size})")
     elif args.agent_jar:
         print(f"[update-service] WARNING: --agent-jar specified but file not found: {args.agent_jar}")
